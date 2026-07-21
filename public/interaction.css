@@ -1,0 +1,9 @@
+button{transition:background-color .15s,color .15s,border-color .15s,transform .1s,box-shadow .15s}
+button:active:not(:disabled){transform:scale(.97)}
+button.busy{background:#25c46a!important;border-color:#25c46a!important;color:#092413!important;box-shadow:0 0 0 3px #25c46a33;cursor:wait}
+button.busy::before{content:"";display:inline-block;width:12px;height:12px;margin-right:7px;vertical-align:-2px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:button-spin .7s linear infinite}
+#runBenchmark{border:1px solid #25c46a;background:#e7f8ee;color:#147f46;padding:9px 13px;border-radius:7px;cursor:pointer;margin-left:auto}
+.report-actions{display:flex;align-items:end;gap:9px}.report-actions label{display:grid;gap:4px;color:var(--muted);font-size:10px}.report-actions select{min-width:300px;border:1px solid var(--line);background:#fff;border-radius:7px;padding:8px 10px;color:var(--ink)}.report-actions button{margin:0}.report-actions button:disabled{cursor:not-allowed;opacity:.45}.benchmark-state{margin-bottom:16px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--muted)}
+.provision-phase{margin-top:7px;color:#9a6810;font-size:12px}
+.provision-warning{margin:12px 0;padding:10px 12px;border:1px solid #efcf86;border-radius:7px;background:#fff8e6;color:#74520d;font-size:12px}.provision-warning strong{display:block;margin-bottom:5px}.provision-warning div{margin-top:3px;word-break:break-word}
+@keyframes button-spin{to{transform:rotate(360deg)}}

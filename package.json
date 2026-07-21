@@ -1,0 +1,11 @@
+{
+  "name": "gpu-fleet-console",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/all.test.js",
+    "check": "node --check server.js && node --check agent/agent.js && node --check public/app.js"
+  },
+  "engines": { "node": ">=20" }
+}

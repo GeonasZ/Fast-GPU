@@ -1,0 +1,28 @@
+#market .table-card { overflow-x: auto; }
+#market table { min-width: 1050px; table-layout: fixed; }
+#market th, #market td { padding-left: 14px; padding-right: 14px; vertical-align: top; overflow-wrap: anywhere; }
+#market th:nth-child(1) { width: 21%; }
+#market th:nth-child(2) { width: 12%; }
+#market th:nth-child(3) { width: 16%; }
+#market th:nth-child(4) { width: 9%; }
+#market th:nth-child(5) { width: 8%; }
+#market th:nth-child(6) { width: 8%; }
+#market th:nth-child(7) { width: 14%; }
+#market th:nth-child(8) { width: 12%; }
+.availability, .price { white-space: nowrap; }
+.availability.unavailable { color: #9b635e; }
+.availability.limited { color: #b87916; white-space: normal; }
+.launch:disabled { opacity: .45; cursor: not-allowed; }
+#market th:last-child, #market td:last-child { white-space: nowrap; overflow-wrap: normal; }
+#market td:last-child { vertical-align: middle; }
+#market [data-regions] { display: inline-flex; align-items: center; justify-content: center; min-width: 92px; white-space: nowrap; line-height: 1.2; }
+.regions summary { cursor: pointer; color: #1b6d47; font-weight: 650; white-space: nowrap; }
+.regions div { margin-top: 8px; max-height: 180px; overflow: auto; color: var(--muted); font-size: 11px; line-height: 1.8; }
+.region-detail td { background: #f7faf8; padding: 16px 20px !important; }
+.region-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(245px, 1fr)); gap: 10px; }
+.region-grid article { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 9px; padding: 13px; }
+.region-grid article > div:first-child { min-width: 0; }
+.region-grid article strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.region-grid .availability { display: block; margin-top: 3px; font-size: 11px; }
+.region-price { white-space: nowrap; font-weight: 700; }
+.region-grid .launch { grid-column: 1 / -1; width: 100%; }

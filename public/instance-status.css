@@ -1,0 +1,33 @@
+.instance-top { align-items: flex-start; gap: 16px; }
+.instance-top .pill {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 62px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: .01em;
+  white-space: nowrap;
+}
+.instance-top .pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.instance-top .pill.running,
+.instance-top .pill.ready { color: #147f46; background: #ecf9f1; border-color: #c9edd8; }
+.instance-top .pill.provisioning,
+.instance-top .pill.starting { color: #94600a; background: #fff7e6; border-color: #f3dfad; }
+.instance-top .pill.stopped,
+.instance-top .pill.stopping { color: #68736d; background: #f2f4f3; border-color: #dfe4e1; }
+.instance-top .pill.failed,
+.instance-top .pill.terminating { color: #b23b35; background: #fff0ef; border-color: #f1cfcc; }
