@@ -33,6 +33,25 @@ if ! command -v sshd >/dev/null 2>&1; then
   apt-get update
   apt-get install -y --no-install-recommends openssh-server
 fi
+ssh_port="${FLEET_SSH_PORT:-22022}"
+ssh_user="${FLEET_SSH_USER:-ubuntu}"
+install -d -m 0755 /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/60-gpu-fleet.conf <<EOF
+Port ${ssh_port}
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin prohibit-password
+EOF
+if [[ -n "${FLEET_SSH_PUBLIC_KEY:-}" ]]; then
+  ssh_home="$(getent passwd "$ssh_user" | cut -d: -f6)"
+  ssh_group="$(id -gn "$ssh_user")"
+  install -d -m 0700 -o "$ssh_user" -g "$ssh_group" "$ssh_home/.ssh"
+  printf '%s\n' "$FLEET_SSH_PUBLIC_KEY" >> "$ssh_home/.ssh/authorized_keys"
+  sort -u -o "$ssh_home/.ssh/authorized_keys" "$ssh_home/.ssh/authorized_keys"
+  chown "$ssh_user:$ssh_group" "$ssh_home/.ssh/authorized_keys"
+  chmod 0600 "$ssh_home/.ssh/authorized_keys"
+fi
 ssh-keygen -A
 sshd -t
 if command -v systemctl >/dev/null 2>&1 && [[ "$(ps -p 1 -o comm= 2>/dev/null || true)" == "systemd" ]]; then
@@ -44,7 +63,7 @@ else
   service ssh restart
 fi
 pgrep -x sshd >/dev/null || fail "SSH startup verification failed"
-timeout 5 ssh-keyscan -p "${FLEET_SSH_PORT:-22}" 127.0.0.1 >/dev/null 2>&1 || fail "SSH handshake verification failed"
+timeout 5 ssh-keyscan -p "$ssh_port" 127.0.0.1 >/dev/null 2>&1 || fail "SSH handshake verification failed"
 
 validate_image() {
   local candidate="$1"
@@ -99,7 +118,7 @@ fi
 docker rm -f gpu-fleet-runtime >/dev/null 2>&1 || true
 report starting_runtime
 env_args=(-e "FLEET_EXPECTED_CUDA_MAJOR=$cuda_major")
-for key in FLEET_AGENT_TOKEN BASE_URL FLEET_AGENT_BUNDLE_URL S3_ENDPOINT S3_BUCKET S3_PREFIX S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
+for key in FLEET_AGENT_ID FLEET_AGENT_SECRET BASE_URL FLEET_AGENT_BUNDLE_URL FLEET_PROVIDER FLEET_INSTANCE_NAME FLEET_TELEMETRY_PUSH_URL S3_ENDPOINT S3_BUCKET S3_PREFIX S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
   [[ -n "${!key:-}" ]] && env_args+=(-e "$key=${!key}")
 done
 docker run -d --name gpu-fleet-runtime --restart unless-stopped --gpus all --network host \
@@ -108,7 +127,7 @@ docker run -d --name gpu-fleet-runtime --restart unless-stopped --gpus all --net
 report installing_dependencies
 
 health_args=()
-[[ -n "${FLEET_AGENT_TOKEN:-}" ]] && health_args=(-H "authorization: Bearer $FLEET_AGENT_TOKEN")
+[[ -n "${FLEET_AGENT_SECRET:-}" ]] && health_args=(-H "authorization: Bearer $FLEET_AGENT_SECRET")
 for _ in $(seq 1 180); do
   if curl -fsS "${health_args[@]}" http://127.0.0.1:3000/health >/dev/null; then
     python3 - "$driver" "$cuda_label" "$image" "$requirement_met" "$state_dir/profile.json" <<'PY'

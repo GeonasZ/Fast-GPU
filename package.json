@@ -7,5 +7,5 @@
     "test": "node test/all.test.js",
     "check": "node --check server.js && node --check agent/agent.js && node --check public/app.js"
   },
-  "engines": { "node": ">=20" }
+  "engines": { "node": ">=22.5" }
 }

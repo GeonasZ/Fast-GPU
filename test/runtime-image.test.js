@@ -58,3 +58,15 @@ test('runtime installs SSH and verifies startup with init-system fallbacks', () 
   assert.match(ssh, /ssh-keyscan/);
   assert.match(ssh, /ssh-autostart-mode/);
 });
+
+test('telemetry uses persistent per-instance credentials instead of a global token', () => {
+  const server = read('server.js');
+  const agent = read('agent/agent.js');
+  const provisioning = read('lib/provisioning.js');
+  assert.match(server, /createCredentialStore/);
+  assert.match(server, /revokeInstance/);
+  assert.match(agent, /FLEET_AGENT_ID/);
+  assert.match(agent, /FLEET_AGENT_SECRET/);
+  assert.doesNotMatch(provisioning, /FLEET_AGENT_TOKEN/);
+  assert.match(agent, /if\(!response\.ok\)throw Error/);
+});

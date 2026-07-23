@@ -135,6 +135,7 @@ S3-compatible bucket/prefix
 $env:PPIO_API_KEY="..."
 $env:HYPERSTACK_API_KEY="..."
 $env:RUNPOD_API_KEY="..."
+$env:FLEET_SSH_PORT="22022" # 必须是非 22 端口
 
 npm test
 npm start
@@ -194,3 +195,22 @@ node --check public/app.js
 - Hyperstack Agent 尚未使用 HTTPS。
 - CLI 安装使用最新版，尚未将最终版本号固化到验收报告。
 - 本地环境无法验证真实 GPU 数值，必须在云端实例运行 benchmark。
+
+# Credential storage
+
+All persistent credentials are stored in the SQLite database configured by
+`FLEET_DATABASE_PATH` (default: `.data/fleet.sqlite`). Keep the database and its
+WAL files on a persistent volume.
+
+The control plane creates a unique `FLEET_AGENT_ID` and `FLEET_AGENT_SECRET` for
+each instance. Agent secrets are stored only as scrypt hashes. Managed SSH
+private keys are encrypted with AES-256-GCM before they are written to the
+`ssh_credentials` table. Set `FLEET_CREDENTIAL_ENCRYPTION_KEY` to a stable,
+random 32-byte base64 or hexadecimal key. Store this key in the deployment
+secret manager, never in the repository or beside the database. Losing or
+changing it makes existing managed SSH keys unreadable.
+
+Removing an instance revokes only that instance's Agent credential. SSH
+credentials are removed after provider deletion is confirmed. The legacy
+`FLEET_AGENT_TOKEN`, `FLEET_SSH_STORE_DIR`, `connections.json`, and plaintext
+private-key storage are not supported.

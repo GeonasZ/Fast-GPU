@@ -55,6 +55,13 @@ def collect():
         "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
         "--format=csv,noheader,nounits",
     ], capture_output=True, text=True, timeout=15)
+    collection_error = None
+    if result.returncode != 0:
+        collection_error = {
+            "component": "nvidia-smi",
+            "code": "gpu_telemetry_collection_failed",
+            "message": (result.stderr or result.stdout).strip()[-1000:] or "nvidia-smi exited with code %s" % result.returncode,
+        }
     gpus = []
     for line in result.stdout.splitlines():
         values = [value.strip() for value in line.split(",")]
@@ -72,12 +79,18 @@ def collect():
     ready = runtime.get("status") == "ready"
     if tools_cache is None or (ready and not tools_ready):
         tools_cache, tools_ready = inspect_tools(), ready
-    return {"ts": int(time.time() * 1000), "gpus": gpus, "tools": tools_cache, "runtime": runtime}
+    telemetry = {"ts": int(time.time() * 1000), "gpus": gpus, "tools": tools_cache, "runtime": runtime}
+    if collection_error:
+        telemetry["error"] = collection_error
+    return telemetry
 
 def push():
-    payload = json.dumps({"provider": os.environ.get("FLEET_PROVIDER", "ppio"), "instanceName": os.environ["FLEET_INSTANCE_NAME"], "telemetry": collect()}).encode()
-    request = urllib.request.Request(os.environ["FLEET_TELEMETRY_PUSH_URL"], data=payload, method="POST", headers={"Content-Type": "application/json", "Authorization": "Bearer " + os.environ.get("FLEET_AGENT_TOKEN", "")})
-    urllib.request.urlopen(request, timeout=15).read()
+    payload = json.dumps({"agentId": os.environ["FLEET_AGENT_ID"], "provider": os.environ.get("FLEET_PROVIDER", "ppio"), "instanceName": os.environ["FLEET_INSTANCE_NAME"], "telemetry": collect()}).encode()
+    request = urllib.request.Request(os.environ["FLEET_TELEMETRY_PUSH_URL"], data=payload, method="POST", headers={"Content-Type": "application/json", "X-Fleet-Agent-Id": os.environ["FLEET_AGENT_ID"], "Authorization": "Bearer " + os.environ["FLEET_AGENT_SECRET"]})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        if response.status < 200 or response.status >= 300:
+            raise RuntimeError("telemetry push returned HTTP %s" % response.status)
+        response.read()
 
 while True:
     try:

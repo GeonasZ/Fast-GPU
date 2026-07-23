@@ -9,6 +9,7 @@
 .gpu-metrics-table td small{display:block;max-width:5ch;margin-top:1px;overflow:hidden;color:var(--muted);font-size:9px;font-weight:500;text-overflow:ellipsis;white-space:nowrap}
 .tool-install{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}.tool-install>button{width:100%;border:0;background:transparent;color:var(--muted);padding:3px 0;text-align:left;cursor:pointer;font-size:10px}.tool-install>button b{float:right;color:var(--ink)}.tool-install>button::after{content:' ↓';float:right;margin-right:8px}.tool-install>button.open::after{content:' ↑'}.tool-install-panel{margin-top:7px;padding:7px 9px;border-radius:7px;background:#fff}.tool-install-panel>div{display:grid;grid-template-columns:14px 90px 1fr;align-items:center;gap:5px;padding:4px 0;font-size:10px}.tool-install-panel small{overflow:hidden;color:var(--muted);text-align:right;text-overflow:ellipsis;white-space:nowrap}.tool-install-panel p{margin:0;color:var(--muted);font-size:10px}
 .telemetry-error { border:1px solid #e8b5b1 }
+.telemetry-message{min-height:80px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:12px;color:#9b312b;text-align:center}.telemetry-message strong{font-size:12px}.telemetry-message small{max-width:100%;font-size:11px;line-height:1.45;overflow-wrap:anywhere}
 .reach-row small { display:block; color:var(--muted); font-size:10px; font-weight:400 }
 .bench-row strong { overflow-wrap:anywhere; white-space:pre-wrap }
 @media(max-width:900px) { .gpu-metrics-table{min-width:460px} }
