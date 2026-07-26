@@ -440,11 +440,13 @@ const agentTargets = new Map(),
   telemetryReadyKeys = new Set(),
   lifecycleActions = new Map(),
   benchmarkJobs = new Map(),
+  sshBenchmarkRuns = new Map(),
   sshSessions = new Map(),
   sshTelemetrySessions = new Map(),
   telemetryListeners = new Map(),
   persistedTelemetryThisRun = new Set(),
-  sshReadiness = new Map();
+  sshReadiness = new Map(),
+  inventoryMissingObservations = new Map();
 const platformStartedAt = Date.now(),
   telemetryRecoveryStartupGraceMs = Math.max(
     0,
@@ -492,12 +494,10 @@ function reconcileProviderInventory(result) {
         ),
       ]),
     );
-  for (const instance of result.data) billingStore.observe(instance);
-  for (const providerId of Object.keys(providers))
-    if (!failedProviders.has(providerId))
-      billingStore.markMissing(providerId, [
-        ...(seenByProvider.get(providerId) || []),
-      ]);
+  for (const instance of result.data) {
+    billingStore.observe(instance);
+    inventoryMissingObservations.delete(`${instance.provider}:${instance.id}`);
+  }
 
   const candidates = new Map();
   for (const record of [
@@ -522,6 +522,34 @@ function reconcileProviderInventory(result) {
   }
   for (const candidate of candidates.values()) {
     if (
+      failedProviders.has(candidate.provider)
+    )
+      continue;
+    const key = `${candidate.provider}:${candidate.id}`;
+    if (seenByProvider.get(candidate.provider)?.has(candidate.id)) {
+      inventoryMissingObservations.delete(key);
+      continue;
+    }
+    inventoryMissingObservations.set(
+      key,
+      (inventoryMissingObservations.get(key) || 0) + 1,
+    );
+  }
+  for (const providerId of Object.keys(providers)) {
+    if (failedProviders.has(providerId)) continue;
+    const presentOrUnconfirmed = new Set(seenByProvider.get(providerId) || []);
+    for (const candidate of candidates.values()) {
+      if (candidate.provider !== providerId) continue;
+      const key = `${providerId}:${candidate.id}`,
+        deleteConfirmed =
+          lifecycleActions.get(candidate.id)?.action === "delete";
+      if (!deleteConfirmed && (inventoryMissingObservations.get(key) || 0) < 2)
+        presentOrUnconfirmed.add(candidate.id);
+    }
+    billingStore.markMissing(providerId, [...presentOrUnconfirmed]);
+  }
+  for (const candidate of candidates.values()) {
+    if (
       failedProviders.has(candidate.provider) ||
       seenByProvider.get(candidate.provider)?.has(candidate.id)
     )
@@ -529,13 +557,18 @@ function reconcileProviderInventory(result) {
     const billing = billingStore.getInstance(candidate.provider, candidate.id),
       deleteConfirmed =
         lifecycleActions.get(candidate.id)?.action === "delete",
-      oldEnough =
-        candidate.createdAt &&
-        Date.now() - Date.parse(candidate.createdAt) > 20 * 60 * 1000,
       confirmedMissing =
-        deleteConfirmed || billing?.status === "terminated" || oldEnough;
-    if (confirmedMissing)
+        deleteConfirmed ||
+        billing?.status === "terminated" ||
+        (inventoryMissingObservations.get(
+          `${candidate.provider}:${candidate.id}`,
+        ) || 0) >= 2;
+    if (confirmedMissing) {
       purgeRemovedInstanceArtifacts(candidate.provider, candidate.id);
+      inventoryMissingObservations.delete(
+        `${candidate.provider}:${candidate.id}`,
+      );
+    }
   }
   return { failedProviders, seenByProvider };
 }
@@ -1169,37 +1202,19 @@ function removeTemporaryFile(filename, attempt = 0) {
     if (
       process.platform === "win32" &&
       ["EPERM", "EBUSY"].includes(error.code) &&
-      attempt < 5
+      attempt < 12
     ) {
       try {
         fs.chmodSync(filename, 0o600);
       } catch {}
       const timer = setTimeout(
         () => removeTemporaryFile(filename, attempt + 1),
-        100 * (attempt + 1),
+        Math.min(100 * 2 ** attempt, 2000),
       );
       timer.unref?.();
     } else console.warn(`临时文件清理失败：${filename}：${error.message}`);
   });
 }
-// Forced removal is cleanup, so a transient Windows OpenSSH file lock must not
-// turn an otherwise successful request into an upload failure.
-const removeFileSync = fs.rmSync.bind(fs);
-fs.rmSync = function (filename, options) {
-  try {
-    return removeFileSync(filename, options);
-  } catch (error) {
-    if (
-      options?.force &&
-      process.platform === "win32" &&
-      ["EPERM", "EBUSY"].includes(error.code)
-    ) {
-      removeTemporaryFile(filename);
-      return;
-    }
-    throw error;
-  }
-};
 function securePrivateKeyFile(filename) {
   fs.chmodSync(filename, 0o600);
   if (process.platform !== "win32") return;
@@ -2020,7 +2035,7 @@ async function proxyAgent(id, path) {
     instanceId: id,
   });
 }
-async function proxyAgentViaSsh(id, path, method = "GET") {
+async function proxyAgentViaSsh(id, agentPath, method = "GET") {
   const record = sshStore.list().find((item) => String(item.id) === String(id));
   if (!record)
     throw Object.assign(Error("该实例没有托管 SSH 凭据"), {
@@ -2041,7 +2056,7 @@ async function proxyAgentViaSsh(id, path, method = "GET") {
     const auth = credential?.secret
       ? ` -H 'authorization: Bearer ${credential.secret}'`
       : "";
-    const remote = `curl -fsS -X ${method === "POST" ? "POST" : "GET"}${auth} http://127.0.0.1:3000${path}`;
+    const remote = `curl -fsS -X ${["POST", "DELETE"].includes(method) ? method : "GET"}${auth} http://127.0.0.1:3000${agentPath}`;
     const output = await runCommand(
       "ssh",
       [
@@ -2381,7 +2396,25 @@ async function api(req, res, url) {
         baseUrlSource !== "environment",
       controlPlaneIssue: baseIssue,
       providers: Object.entries(providers).map(([id, p]) => {
-        const saved = providerKeyStore.status(id);
+        const saved = providerKeyStore.status(id),
+          tailscaleAuthKeyExpiresAt =
+            id === "hyperstack"
+              ? providerKeyStore.get("__tailscale_auth_key_expires_at__") || ""
+              : "",
+          tailscaleExpiryTime = tailscaleAuthKeyExpiresAt
+            ? Date.parse(`${tailscaleAuthKeyExpiresAt}T23:59:59Z`)
+            : NaN,
+          tailscaleAuthKeyDaysRemaining = Number.isFinite(tailscaleExpiryTime)
+            ? Math.ceil((tailscaleExpiryTime - Date.now()) / 86400000)
+            : null,
+          tailscaleAuthKeyStatus =
+            tailscaleAuthKeyDaysRemaining == null
+              ? "unknown"
+              : tailscaleAuthKeyDaysRemaining < 0
+                ? "expired"
+                : tailscaleAuthKeyDaysRemaining <= 7
+                  ? "expiring"
+                  : "valid";
         return {
           id,
           name: p.name,
@@ -2403,6 +2436,9 @@ async function api(req, res, url) {
                   tailscaleAuthKeyConfigured: Boolean(
                     process.env.TAILSCALE_AUTH_KEY,
                   ),
+                  tailscaleAuthKeyExpiresAt,
+                  tailscaleAuthKeyDaysRemaining,
+                  tailscaleAuthKeyStatus,
                 }
               : undefined,
         };
@@ -2956,11 +2992,44 @@ async function api(req, res, url) {
         status: 400,
       });
     const tailscaleAuthKey = String(d.tailscaleAuthKey || "").trim();
+    const tailscaleAuthKeyExpiresAt = String(
+      d.tailscaleAuthKeyExpiresAt || "",
+    ).trim();
+    if (
+      tailscaleAuthKeyExpiresAt &&
+      !/^\d{4}-\d{2}-\d{2}$/.test(tailscaleAuthKeyExpiresAt)
+    )
+      throw Object.assign(Error("Tailscale Auth Key 到期日期格式无效"), {
+        status: 400,
+      });
+    if (tailscaleAuthKey && !d.tailscaleReusableConfirmed)
+      throw Object.assign(
+        Error("请确认已在 Tailscale 为该 Auth Key 开启 Reusable"),
+        { status: 400, code: "tailscale_auth_key_not_reusable" },
+      );
+    if (!tailscaleAuthKeyExpiresAt && tailscaleAuthKey)
+      throw Object.assign(Error("请填写 Tailscale Auth Key 的到期日期"), {
+        status: 400,
+        code: "tailscale_auth_key_expiry_missing",
+      });
+    if (
+      tailscaleAuthKey &&
+      Date.parse(`${tailscaleAuthKeyExpiresAt}T23:59:59Z`) < Date.now()
+    )
+      throw Object.assign(Error("Tailscale Auth Key 的到期日期不能早于今天"), {
+        status: 400,
+        code: "tailscale_auth_key_expired",
+      });
     if (tailscaleAuthKey) {
       providerKeyStore.set("__tailscale_auth_key__", tailscaleAuthKey);
       process.env.TAILSCALE_AUTH_KEY = tailscaleAuthKey;
       providers.hyperstack.env.TAILSCALE_AUTH_KEY = tailscaleAuthKey;
     }
+    if (tailscaleAuthKeyExpiresAt)
+      providerKeyStore.set(
+        "__tailscale_auth_key_expires_at__",
+        tailscaleAuthKeyExpiresAt,
+      );
     if (!process.env.TAILSCALE_AUTH_KEY)
       throw Object.assign(Error("Tailscale Auth Key 为必填项"), {
         status: 400,
@@ -2976,6 +3045,7 @@ async function api(req, res, url) {
       imageName: values.HYPERSTACK_IMAGE_NAME,
       imageUser: values.HYPERSTACK_IMAGE_USER,
       tailscaleAuthKeyConfigured: true,
+      tailscaleAuthKeyExpiresAt,
     });
   }
   if (req.method === "GET" && url.pathname === "/api/runtime-images")
@@ -3742,8 +3812,8 @@ async function api(req, res, url) {
         remotePath,
       });
     } finally {
-      fs.rmSync(keyFile, { force: true });
-      fs.rmSync(localFile, { force: true });
+      removeTemporaryFile(keyFile);
+      removeTemporaryFile(localFile);
     }
   }
   const localSync = url.pathname.match(
@@ -3854,7 +3924,7 @@ async function api(req, res, url) {
         output,
       });
     } finally {
-      fs.rmSync(keyFile, { force: true });
+      removeTemporaryFile(keyFile);
     }
   }
   const passwordSshTerminal = url.pathname.match(
@@ -3993,7 +4063,7 @@ async function api(req, res, url) {
       });
       securePrivateKeyFile(keyFile);
     } catch (error) {
-      fs.rmSync(keyFile, { force: true });
+      removeTemporaryFile(keyFile);
       throw error;
     }
     let child;
@@ -4023,7 +4093,7 @@ async function api(req, res, url) {
         },
       );
     } catch (cause) {
-      fs.rmSync(keyFile, { force: true });
+      removeTemporaryFile(keyFile);
       throw Object.assign(Error(`无法启动本机 SSH 客户端：${cause.message}`), {
         status: 500,
         code: "ssh_client_start_failed",
@@ -4139,6 +4209,8 @@ async function api(req, res, url) {
     }
     billingStore.recordRequestedAction(d.provider, id, operation);
     lifecycleActions.set(String(id), { action: operation, at: Date.now() });
+    if (operation === "delete")
+      purgeRemovedInstanceArtifacts(d.provider, id);
     return json(res, 202, {
       ok: true,
       status:
@@ -4212,10 +4284,32 @@ async function api(req, res, url) {
   const bench = url.pathname.match(/^\/api\/instances\/([^/]+)\/benchmark$/);
   if (bench) {
     const id = decodeURIComponent(bench[1]);
+    if (req.method === "DELETE") {
+      if (telemetryMode !== "ssh")
+        throw Object.assign(Error("当前测试通道暂不支持中止"), { status: 409 });
+      const result = await proxyAgentViaSsh(id, "/benchmark", "DELETE");
+      sshBenchmarkRuns.delete(id);
+      return json(res, 200, { ...result, status: "cancelled" });
+    }
     if (req.method === "POST") {
       if (telemetryMode === "ssh") {
-        const report = await proxyAgentViaSsh(id, "/benchmark", "POST");
-        return json(res, 200, { report });
+        const d = await body(req),
+          mode = d.mode === "full" ? "full" : "quick";
+        if (sshBenchmarkRuns.has(id))
+          throw Object.assign(Error("该实例已有性能测试正在运行"), {
+            status: 409,
+          });
+        sshBenchmarkRuns.set(id, { status: "running", mode, startedAt: Date.now() });
+        try {
+          const report = await proxyAgentViaSsh(
+            id,
+            `/benchmark?mode=${mode}`,
+            "POST",
+          );
+          return json(res, 200, { report });
+        } finally {
+          sshBenchmarkRuns.delete(id);
+        }
       }
       const d = await body(req),
         key = instanceTelemetryKeys.get(String(id)),
@@ -4255,6 +4349,28 @@ async function api(req, res, url) {
         ? await proxyAgentViaSsh(id, "/benchmark")
         : await proxyAgent(id, "/benchmark");
     return json(res, 200, report);
+  }
+  const benchPreflight = url.pathname.match(
+    /^\/api\/instances\/([^/]+)\/benchmark-preflight$/,
+  );
+  if (req.method === "GET" && benchPreflight) {
+    const id = decodeURIComponent(benchPreflight[1]),
+      key = instanceTelemetryKeys.get(id),
+      cached = pushedTelemetry.get(key),
+      telemetry =
+        cached && Date.now() - cached.at < 15000
+          ? cached.data
+          : await proxyAgentViaSsh(id, "/telemetry");
+    const utilizations = (telemetry.gpus || [])
+        .map((gpu) => Number(gpu.util))
+        .filter(Number.isFinite),
+      maxUtilization = utilizations.length ? Math.max(...utilizations) : null;
+    return json(res, 200, {
+      maxUtilization,
+      highUtilization: maxUtilization !== null && maxUtilization >= 50,
+      gpus: telemetry.gpus || [],
+      benchmark: sshBenchmarkRuns.get(id) || { status: "idle" },
+    });
   }
   const reachability = url.pathname.match(
     /^\/api\/instances\/([^/]+)\/reachability$/,

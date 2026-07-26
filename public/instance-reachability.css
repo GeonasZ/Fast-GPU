@@ -4,7 +4,7 @@
 .instance-panels{min-width:0}
 .instance.expanded .instance-panels{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start;gap:14px}
 .instance-detail{max-height:0;margin-top:0;padding:0 16px;overflow:hidden;visibility:hidden;opacity:0;transform:translateY(-8px);border:0 solid var(--line);border-radius:9px;background:#fbfcfb;transition:max-height .34s ease,margin-top .34s ease,padding .34s ease,border-width .34s ease,opacity .22s ease,transform .34s ease,visibility 0s linear .34s}
-.instance.expanded .instance-detail{max-height:720px;margin-top:0;padding:16px;visibility:visible;opacity:1;transform:none;border-width:1px;transition:max-height .42s ease,padding .34s ease,border-width .34s ease,opacity .25s ease .08s,transform .34s ease,visibility 0s}
+.instance.expanded .instance-detail{max-height:1100px;margin-top:0;padding:16px;visibility:visible;opacity:1;transform:none;border-width:1px;transition:max-height .42s ease,padding .34s ease,border-width .34s ease,opacity .25s ease .08s,transform .34s ease,visibility 0s}
 .instance.expanded .reachability-targets{grid-template-columns:repeat(2,minmax(0,1fr))}
 .instance-grid.layout-transitioning .instance-detail{transition:none}
 @container (min-width:816px){.instance.expanded{grid-column:span 2}}
@@ -21,6 +21,13 @@
 .reachability-target{display:grid;grid-template-columns:1fr auto;gap:3px 8px;padding:10px;border:1px solid var(--line);border-radius:7px;background:#fff}
 .reachability-target small{grid-column:1/-1;color:var(--muted);overflow-wrap:anywhere}
 .direct-note{margin-top:10px;color:var(--muted);font-size:11px}
+.instance-benchmark{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
+.instance-benchmark-actions{display:flex;align-items:center;gap:7px}
+.instance-benchmark-actions select{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fff}
+.instance-benchmark-actions .danger:not(:disabled){border-color:#d99b94;color:#9b3027}
+.instance-benchmark-state{padding:10px 12px;border-radius:7px;background:#f4f7f5;color:var(--muted);font-size:12px}
+.instance-benchmark-result{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:9px}
+.instance-benchmark-result span{padding:8px;border:1px solid var(--line);border-radius:6px;background:#fff;font-size:11px}
 @media(max-width:1100px){.reachability-targets{grid-template-columns:repeat(2,1fr)}}
 .ssh-security-note{margin:8px 0 16px;color:var(--muted);font-size:12px}
 .ssh-field{display:grid;grid-template-columns:70px 1fr;align-items:center;padding:10px 0;border-top:1px solid var(--line)}

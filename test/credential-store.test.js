@@ -73,6 +73,46 @@ test('credential store rejects missing or incorrect encryption keys and port 22'
   }
 });
 
+test('removed instances leave no active credentials or telemetry history', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-instance-purge-'));
+  const filename = path.join(directory, 'fleet.sqlite');
+  try {
+    const store = createCredentialStore(environment(filename));
+    const agent = store.agents.create('ppio', 'deleted-instance');
+    const key = store.ssh.createKey();
+    store.agents.bind(agent.agentId, 'instance-1');
+    store.ssh.save('instance-1', {
+      provider: 'ppio',
+      username: 'root',
+      publicKey: key.publicKey,
+      privateKey: key.privateKey,
+      internalPort: store.ssh.port,
+    });
+    store.access.save('ppio', 'instance-1', {
+      type: 'password',
+      username: 'root',
+      secret: 'temporary-password',
+    });
+    store.telemetryHistory.markSeen('ppio', 'instance-1');
+
+    assert.equal(store.agents.revokeInstance('ppio', 'instance-1'), true);
+    assert.equal(store.ssh.remove('ppio', 'instance-1'), true);
+    assert.equal(store.access.remove('ppio', 'instance-1'), true);
+    assert.equal(store.telemetryHistory.remove('ppio', 'instance-1'), true);
+
+    assert.equal(store.agents.findByInstance('ppio', 'instance-1'), null);
+    assert.equal(store.ssh.get('ppio', 'instance-1'), null);
+    assert.equal(store.access.get('ppio', 'instance-1'), null);
+    assert.equal(store.telemetryHistory.get('ppio', 'instance-1'), null);
+    assert.deepEqual(store.agents.list(), []);
+    assert.deepEqual(store.ssh.list(), []);
+    assert.deepEqual(store.access.list(), []);
+    store.close();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('SSH private keys cannot be decrypted with a different master key', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-credential-key-'));
   const filename = path.join(directory, 'fleet.sqlite');

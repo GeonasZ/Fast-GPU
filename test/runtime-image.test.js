@@ -196,7 +196,10 @@ test('managed SSH remains available when agent telemetry is unavailable', () => 
   assert.doesNotMatch(server, /requireDeveloperTools/);
   assert.match(app, /SSH \/ 文件/);
   assert.match(app, /accessible\s*=\s*Boolean\(instance\.sshReady\)/);
-  assert.match(app, /button\.disabled\s*=\s*!accessible/);
+  assert.match(app, /button\.disabled\s*=\s*false/);
+  assert.match(app, /button\.classList\.toggle\(["']ssh-loading["'],\s*!accessible\)/);
+  assert.match(app, /\$\(["']#openSshTerminal["']\)\.disabled\s*=\s*true/);
+  assert.doesNotMatch(app, /keyButton\.textContent\s*=\s*["']下载 SSH Key["']/);
   assert.match(server, /scheduleSshReadinessProbe/);
   assert.match(server, /x\.status\s*===\s*["']running["']/);
   assert.match(server, /\.\.\.current[\s\S]*probing:\s*true/);
@@ -273,10 +276,14 @@ test('provider running state stays green while platform initialization remains v
   assert.match(app, /正在安装并配置 SSH/);
   assert.match(app, /正在等待 SSH 安装并就绪/);
   assert.match(app, /正在检测 SSH 是否就绪/);
+  assert.match(app, /正在检测远端 SSH 与遥测连接是否恢复/);
+  assert.match(app, /远端 SSH 尚未就绪，正在等待 SSH 与遥测连接恢复/);
+  assert.match(app, /connectionRecoveryLabel = instanceConnectionRecoveryLabel\(i\)/);
   assert.match(app, /const sshMarkup = instance\.sshDiagnostic\?\.message/);
   assert.match(app, /i\.lifecycleAction\s*===\s*["']delete["'][\s\S]*["']terminating["']/);
   assert.match(app, /右上角状态必须一直使用红色 terminating/);
   assert.match(app, /canStart\s*=\s*\["stopped",\s*"stopping"\]\.includes\(visualStatus\)/);
+  assert.match(app, /initializationMarkup\s*=\s*\["stopped",\s*"stopping",\s*"terminating"\]\.includes\(\s*visualStatus/);
   assert.match(app, /state\s*===\s*["']stopping["']\s*\?\s*["']启动["']/);
   assert.match(app, /生命周期按钮必须跟右上角的派生状态使用同一口径/);
   assert.match(app, /正在安装构建工具与运行依赖/);

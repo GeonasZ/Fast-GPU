@@ -34,7 +34,8 @@ let offers = [],
 const telemetryCache = new Map(),
   reachabilityCache = new Map(),
   expandedInstances = new Set(),
-  reachabilityLoads = new Set();
+  reachabilityLoads = new Set(),
+  instanceBenchmarkRuns = new Map();
 function decorateSshEntries() {
   document.querySelectorAll(".instance").forEach(function (card) {
     const el = card.querySelector(".instance-actions > .sub");
@@ -132,6 +133,17 @@ function platformProvisioningLabel(instance) {
   if (phase === "starting_agent") return "正在启动监控 Agent";
   if (phase === "syncing_data") return "正在同步数据";
   return "正在进行平台初始化";
+}
+function instanceConnectionRecoveryLabel(instance) {
+  if (
+    instance?.providerState !== "running" ||
+    !instance?.platformManaged ||
+    instance?.sshReady
+  )
+    return "";
+  return instance?.sshDiagnostic?.state === "probing"
+    ? "正在检测远端 SSH 与遥测连接是否恢复"
+    : "远端 SSH 尚未就绪，正在等待 SSH 与遥测连接恢复";
 }
 function updateInitializationTimers() {
   $$("[data-initialization-started-at]").forEach(function (timer) {
@@ -1121,7 +1133,16 @@ function openProviderWindow(url, name) {
 function renderProviderKeys(provider, status) {
   const keys = status?.keys || [],
     form = $("#providerKeyForm"),
-    addButton = $("#addProviderKey");
+    addButton = $("#addProviderKey"),
+    keyButton = $("#launchKeyPortal"),
+    keyHead = $(".provider-key-head");
+  let headActions = keyHead.querySelector(".provider-key-head-actions");
+  if (!headActions) {
+    headActions = document.createElement("div");
+    headActions.className = "provider-key-head-actions";
+    keyHead.append(headActions);
+  }
+  headActions.append(keyButton, addButton);
   if (!status) {
     $("#providerKeyStatus").textContent = "正在读取 Key 状态…";
     $("#providerKeyList").innerHTML = "";
@@ -1517,7 +1538,33 @@ if (!$("#hyperstackImageUser")) {
   imageUserLabel.innerHTML =
     '镜像 SSH 用户 <span class="default-value-tag">默认值，可选修改</span><input id="hyperstackImageUser" autocomplete="username" placeholder="例如 ubuntu、debian">';
   tailscaleLabel.innerHTML =
-    'Tailscale Auth Key<input id="hyperstackTailscaleAuthKey" type="password" autocomplete="new-password" placeholder="留空则保留已保存的 Key">';
+    'Tailscale Auth Key<input id="hyperstackTailscaleAuthKey" type="password" autocomplete="new-password" placeholder="粘贴 tskey-auth-…">';
+  const tailscaleInput = tailscaleLabel.querySelector("input"),
+    tailscaleTitle = document.createElement("span"),
+    tailscaleLink = document.createElement("button"),
+    tailscaleHint = document.createElement("small"),
+    tailscaleMeta = document.createElement("div");
+  tailscaleTitle.className = "hyperstack-field-title";
+  tailscaleTitle.textContent = "Tailscale Auth Key";
+  tailscaleLink.type = "button";
+  tailscaleLink.className = "field-link-button";
+  tailscaleLink.textContent = "申请 Key ↗";
+  tailscaleLink.onclick = () =>
+    openProviderWindow(
+      "https://console.tailscale.com/admin/settings/keys",
+      "gpu-fleet-tailscale-auth-key",
+    );
+  tailscaleLabel.firstChild.remove();
+  tailscaleTitle.append(tailscaleLink);
+  tailscaleLabel.insertBefore(tailscaleTitle, tailscaleInput);
+  tailscaleHint.className = "tailscale-auth-key-hint";
+  tailscaleHint.innerHTML =
+    '<strong>请选择 Auth keys → Generate auth key…</strong><span>需要的是设备认证密钥（以 <code>tskey-auth-</code> 开头），不是下方的 API access token。创建多台 VM 时必须开启 Reusable。</span>';
+  tailscaleLabel.append(tailscaleHint);
+  tailscaleMeta.className = "tailscale-key-meta";
+  tailscaleMeta.innerHTML =
+    '<span class="tailscale-reusable-confirm"><input id="hyperstackTailscaleReusable" type="checkbox">我已在 Tailscale 开启 Reusable</span><span class="tailscale-expiry-field"><span>Key 到期日期</span><input id="hyperstackTailscaleExpiresAt" type="date"></span>';
+  tailscaleLabel.append(tailscaleMeta);
   tailscaleStatus.id = "hyperstackTailscaleKeyStatus";
   tailscaleStatus.textContent = "尚未配置 Tailscale Auth Key";
   submit.before(imageUserLabel, tailscaleLabel, tailscaleStatus);
@@ -1568,11 +1615,39 @@ async function loadHyperstackResources(saved = {}) {
     };
     $("#hyperstackImageUser").value =
       saved.imageUser || inferHyperstackImageUser();
-    $("#hyperstackTailscaleAuthKey").value = "";
+    const tailscaleAuthKeyInput = $("#hyperstackTailscaleAuthKey"),
+      savedTailscaleMask = "••••••••••••";
+    tailscaleAuthKeyInput.value = saved.tailscaleAuthKeyConfigured
+      ? savedTailscaleMask
+      : "";
+    tailscaleAuthKeyInput.dataset.savedMask = saved.tailscaleAuthKeyConfigured
+      ? "true"
+      : "";
+    tailscaleAuthKeyInput.onfocus = () => {
+      if (tailscaleAuthKeyInput.dataset.savedMask === "true") {
+        tailscaleAuthKeyInput.value = "";
+        tailscaleAuthKeyInput.dataset.savedMask = "";
+      }
+    };
+    tailscaleAuthKeyInput.onblur = () => {
+      if (!tailscaleAuthKeyInput.value && saved.tailscaleAuthKeyConfigured) {
+        tailscaleAuthKeyInput.value = savedTailscaleMask;
+        tailscaleAuthKeyInput.dataset.savedMask = "true";
+      }
+    };
+    $("#hyperstackTailscaleReusable").checked = false;
+    $("#hyperstackTailscaleExpiresAt").value =
+      saved.tailscaleAuthKeyExpiresAt || "";
     $("#hyperstackTailscaleKeyStatus").textContent =
-      saved.tailscaleAuthKeyConfigured
-        ? "已加密保存 Tailscale Auth Key；留空不会覆盖"
-        : "尚未配置 Tailscale Auth Key";
+      saved.tailscaleAuthKeyStatus === "expired"
+        ? `Tailscale Auth Key 已于 ${saved.tailscaleAuthKeyExpiresAt} 过期，请更换`
+        : saved.tailscaleAuthKeyStatus === "expiring"
+          ? `Tailscale Auth Key 将于 ${saved.tailscaleAuthKeyExpiresAt} 过期（剩余 ${saved.tailscaleAuthKeyDaysRemaining} 天）`
+          : saved.tailscaleAuthKeyConfigured
+            ? `已加密保存 Tailscale Auth Key${saved.tailscaleAuthKeyExpiresAt ? `；有效期至 ${saved.tailscaleAuthKeyExpiresAt}` : "；到期时间未知"}`
+            : "尚未配置 Tailscale Auth Key";
+    $("#hyperstackTailscaleKeyStatus").dataset.state =
+      saved.tailscaleAuthKeyStatus || "";
     const filterKeypairs = () => {
       const selected = environment.value;
       [...keypair.options].forEach(
@@ -1609,11 +1684,19 @@ $("#refreshHyperstackResources").onclick = () =>
     providerConfigStatus.find((x) => x.id === "hyperstack")?.hyperstackConfig,
   );
 if (!$("#createHyperstackKeypair")) {
-  const button = document.createElement("button");
+  const button = document.createElement("button"),
+    keypairSelect = $("#hyperstackKeypair"),
+    keypairLabel = keypairSelect.parentElement,
+    keypairTitle = document.createElement("span");
   button.id = "createHyperstackKeypair";
   button.type = "button";
-  button.textContent = "平台创建";
-  $("#hyperstackKeypair").insertAdjacentElement("afterend", button);
+  button.className = "field-link-button";
+  button.textContent = "＋ 平台创建";
+  keypairTitle.className = "hyperstack-field-title";
+  keypairTitle.textContent = "SSH Keypair";
+  keypairTitle.append(button);
+  keypairLabel.firstChild.remove();
+  keypairLabel.insertBefore(keypairTitle, keypairSelect);
 }
 $("#createHyperstackKeypair").onclick = async () => {
   const button = $("#createHyperstackKeypair"),
@@ -1638,7 +1721,7 @@ $("#createHyperstackKeypair").onclick = async () => {
     toast("Keypair 创建失败：" + error.message);
   } finally {
     button.disabled = false;
-    button.textContent = "平台创建";
+    button.textContent = "＋ 平台创建";
   }
 };
 $("#hyperstackConfigForm").onsubmit = async (event) => {
@@ -1654,7 +1737,12 @@ $("#hyperstackConfigForm").onsubmit = async (event) => {
         keyName: $("#hyperstackKeypair").value,
         imageName: $("#hyperstackImage").value,
         imageUser: $("#hyperstackImageUser").value,
-        tailscaleAuthKey: $("#hyperstackTailscaleAuthKey").value,
+        tailscaleAuthKey:
+          $("#hyperstackTailscaleAuthKey").dataset.savedMask === "true"
+            ? ""
+            : $("#hyperstackTailscaleAuthKey").value,
+        tailscaleAuthKeyExpiresAt: $("#hyperstackTailscaleExpiresAt").value,
+        tailscaleReusableConfirmed: $("#hyperstackTailscaleReusable").checked,
       }),
     });
     await loadProviderConfig();
@@ -2341,6 +2429,15 @@ function renderBenchmarkReport(r, i) {
     `${g.busId} · PCIe Gen ${g.pcie.genCurrent}/${g.pcie.genMax} · x${g.pcie.widthCurrent}/x${g.pcie.widthMax}`,
     "pass",
   ]);
+  const computeRows = (r.compute?.gpus || []).flatMap((gpu) =>
+    (gpu.results || []).map((result) => [
+      `GPU ${gpu.index} · ${String(result.precision).toUpperCase()} GEMM`,
+      result.ok
+        ? `${fmt(result.tflops, 2)} TFLOPS · ${fmt(result.medianMs, 2)} ms`
+        : result.error || "不支持",
+      result.ok ? "pass" : "fail",
+    ]),
+  );
   const summary = [
     [
       "Internet ↓ / ↑",
@@ -2372,7 +2469,12 @@ function renderBenchmarkReport(r, i) {
     v,
     "pass",
   ]);
-  $("#benchmarkRows").innerHTML = [...gpuRows, ...summary, ...detail]
+  $("#benchmarkRows").innerHTML = [
+    ...gpuRows,
+    ...computeRows,
+    ...summary,
+    ...detail,
+  ]
     .map(
       ([label, value, state]) =>
         `<div class="bench-row"><span>${esc(label)}</span><strong>${esc(value)}</strong><b class="${state}">${state === "pass" ? "LIVE" : "FAIL"}</b></div>`,
@@ -2527,6 +2629,117 @@ function reachabilityMarkup(report) {
     (report.error ? " · " + esc(report.error) : "") +
     '</small></div></div><p class="direct-note">由平台控制面直接连接云主机 SSH 端口，不依赖实例 Agent。</p>'
   );
+}
+function instanceBenchmarkMarkup(instance) {
+  const run = instanceBenchmarkRuns.get(String(instance.id)),
+    running = run?.status === "running" || run?.status === "stopping",
+    state =
+      run?.message ||
+      (instance.benchmarkReady
+        ? "启动前会通过 SSH 实时检查 GPU 利用率。"
+        : instance.benchmarkMessage || "测试通道尚未就绪。");
+  return `<section class="instance-benchmark"><div class="detail-head"><div><strong>性能测试</strong><small>FP32/TF32/FP16/BF16 算力、带宽、NCCL、磁盘与网络</small></div><div class="instance-benchmark-actions"><select data-benchmark-mode="${esc(instance.id)}" ${running ? "disabled" : ""}><option value="quick">快速测试</option><option value="full">完整测试</option></select><button data-instance-benchmark="${esc(instance.id)}" ${!instance.benchmarkReady || running ? "disabled" : ""}>开始测试</button><button class="danger" data-stop-benchmark="${esc(instance.id)}" ${running ? "" : "disabled"}>${run?.status === "stopping" ? "正在停止…" : "停止测试"}</button></div></div><div class="instance-benchmark-state" id="b-${esc(instance.id)}">${esc(state)}</div>${run?.report ? instanceBenchmarkResultMarkup(run.report) : ""}</section>`;
+}
+function instanceBenchmarkResultMarkup(report) {
+  const gpuCount = report.gpus?.length || 0,
+    disk = report.disk,
+    internet = report.internet,
+    computeResults = (report.compute?.gpus || []).flatMap(
+      (gpu) => gpu.results || [],
+    ),
+    compute = computeResults
+      .filter((result) => result.ok)
+      .map(
+        (result) =>
+          `${String(result.precision).toUpperCase()} ${fmt(result.tflops, 1)}`,
+      )
+      .join(" / ");
+  return `<div class="instance-benchmark-result"><span>${gpuCount} 张 GPU</span><span>算力 ${compute || "不可用"} TFLOPS</span><span>磁盘 ${fmt(disk?.readMBps)} / ${fmt(disk?.writeMBps)} MB/s</span><span>网络 ${fmt(internet?.downloadMbps)} / ${fmt(internet?.uploadMbps)} Mbps</span></div>`;
+}
+function updateInstanceBenchmarkCard(id) {
+  const instance = instances.find((item) => String(item.id) === String(id)),
+    current = document.querySelector(
+      `[data-instance-id="${CSS.escape(String(id))}"] .instance-benchmark`,
+    );
+  if (instance && current)
+    current.outerHTML = instanceBenchmarkMarkup(instance);
+  bindInstanceBenchmarkButtons();
+}
+async function startInstanceBenchmark(id) {
+  const instance = instances.find((item) => String(item.id) === String(id));
+  if (!instance?.benchmarkReady) return;
+  const preflight = await request(
+    `/api/instances/${encodeURIComponent(id)}/benchmark-preflight`,
+  );
+  if (
+    preflight.highUtilization &&
+    !confirm(
+      `当前 GPU 利用率最高为 ${preflight.maxUtilization}%，实例可能正在运行任务。\n\n性能测试会占用 GPU、磁盘和网络资源，仍要继续吗？`,
+    )
+  )
+    return;
+  const mode =
+    document.querySelector(`[data-benchmark-mode="${CSS.escape(String(id))}"]`)
+      ?.value || "quick";
+  instanceBenchmarkRuns.set(String(id), {
+    status: "running",
+    message: "正在通过 SSH 运行性能测试，可随时停止。",
+  });
+  updateInstanceBenchmarkCard(id);
+  try {
+    const response = await request(
+      `/api/instances/${encodeURIComponent(id)}/benchmark`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode }),
+      },
+    );
+    instanceBenchmarkRuns.set(String(id), {
+      status: "completed",
+      message: "测试完成。",
+      report: response.report || response,
+    });
+    toast(`${instance.name} 性能测试完成`);
+  } catch (error) {
+    const stopped =
+      instanceBenchmarkRuns.get(String(id))?.status === "stopping";
+    instanceBenchmarkRuns.set(String(id), {
+      status: stopped ? "cancelled" : "failed",
+      message: stopped ? "测试已停止。" : `测试失败：${error.message}`,
+    });
+    if (!stopped) toast(`性能测试失败：${error.message}`);
+  }
+  updateInstanceBenchmarkCard(id);
+}
+async function stopInstanceBenchmark(id) {
+  const run = instanceBenchmarkRuns.get(String(id));
+  if (!run || !["running", "stopping"].includes(run.status)) return;
+  run.status = "stopping";
+  run.message = "正在停止远端测试进程…";
+  updateInstanceBenchmarkCard(id);
+  try {
+    await request(`/api/instances/${encodeURIComponent(id)}/benchmark`, {
+      method: "DELETE",
+    });
+    run.status = "cancelled";
+    run.message = "测试已停止。";
+  } catch (error) {
+    run.status = "failed";
+    run.message = `停止失败：${error.message}`;
+  }
+  updateInstanceBenchmarkCard(id);
+}
+function bindInstanceBenchmarkButtons() {
+  $$("[data-instance-benchmark]").forEach((button) => {
+    button.onclick = () =>
+      startInstanceBenchmark(button.dataset.instanceBenchmark).catch((error) =>
+        toast(`无法开始测试：${error.message}`),
+      );
+  });
+  $$("[data-stop-benchmark]").forEach((button) => {
+    button.onclick = () => stopInstanceBenchmark(button.dataset.stopBenchmark);
+  });
 }
 async function loadReachability(i, force) {
   const id = String(i.id);
@@ -2700,22 +2913,33 @@ loadInstances = async function () {
         // stopping 后，下一次可执行的动作已经是“启动”，不能因为原始
         // status 还不是 stopped 又渲染成“停止”。
         canStart = ["stopped", "stopping"].includes(visualStatus),
-        initializationMarkup = initializationStartedAt
-          ? '<div class="provision-phase" data-initialization-started-at="' +
-            esc(initializationStartedAt) +
-            '">' +
-            esc(platformProvisioningLabel(i)) +
-            " · " +
-            esc(formatInitializationElapsed(initializationStartedAt)) +
-            "</div>"
-          : i.runtime?.phaseLabel
-            ? '<div class="provision-phase">' +
-              esc(i.runtime.phaseLabel) +
-              (i.runtime.message ? " · " + esc(i.runtime.message) : "") +
+        connectionRecoveryLabel = instanceConnectionRecoveryLabel(i),
+        initializationMarkup = ["stopped", "stopping", "terminating"].includes(
+          visualStatus,
+        )
+          ? ""
+          : connectionRecoveryLabel
+            ? '<div class="provision-phase connection-recovery">' +
+              esc(connectionRecoveryLabel) +
               "</div>"
-            : "";
+            : initializationStartedAt
+              ? '<div class="provision-phase" data-initialization-started-at="' +
+                esc(initializationStartedAt) +
+                '">' +
+                esc(platformProvisioningLabel(i)) +
+                " · " +
+                esc(formatInitializationElapsed(initializationStartedAt)) +
+                "</div>"
+              : i.runtime?.phaseLabel
+                ? '<div class="provision-phase">' +
+                  esc(i.runtime.phaseLabel) +
+                  (i.runtime.message ? " · " + esc(i.runtime.message) : "") +
+                  "</div>"
+                : "";
       return (
-        '<article class="instance ' +
+        '<article data-instance-id="' +
+        id +
+        '" class="instance ' +
         (expanded ? "expanded" : "") +
         '"><div class="instance-top"><div><strong>' +
         esc(i.name) +
@@ -2755,7 +2979,9 @@ loadInstances = async function () {
         id +
         '">' +
         reachabilityMarkup(reachabilityCache.get(String(i.id))) +
-        '</div></div></div><div class="instance-actions"><span class="sub">' +
+        "</div>" +
+        instanceBenchmarkMarkup(i) +
+        '</div></div><div class="instance-actions"><span class="sub">' +
         esc(
           i.accessType === "tailscale"
             ? "无公网 IP · 请到 Tailscale 管理后台获取 100.x.x.x"
@@ -3243,7 +3469,7 @@ document.addEventListener("click", (event) => {
 const localSyncRow = document.createElement("div");
 localSyncRow.className = "local-sync";
 localSyncRow.innerHTML =
-  '<div id="localClientNotice" class="local-client-notice">正在检测本地客户端…</div><div id="rsyncInstallChoices" class="rsync-install-choices" hidden><button type="button" id="downloadSystemRsync">安装到电脑<small>调用系统包管理器，不打开网页；删除软件后仍保留</small></button><button type="button" id="downloadManagedRsync">安装到软件内<small>仅供 Fast GPU 使用，删除软件时会一起删除</small></button></div><div class="sync-direction" role="group" aria-label="同步方向"><button type="button" class="active" data-sync-direction="upload">本地 → 云端</button><button type="button" data-sync-direction="download">云端 → 本地</button></div><div id="localSyncControls" class="sync-paths"><label><span>本地路径</span><div class="sync-path-input"><input id="localSyncPath" placeholder="例如 D:\\datasets" aria-label="本地路径"><button type="button" id="browseLocalSyncPath" class="sync-browse-button" aria-label="浏览本地文件夹">浏览</button></div></label><div class="sync-path-arrow" aria-hidden="true">→</div><label><span>云端路径</span><input id="localSyncRemotePath" value="/data/sync" aria-label="云端路径"></label><button type="button" id="runLocalSync" class="sync-run-button">同步到云端</button></div><pre id="localSyncOutput" class="local-sync-output" hidden></pre>';
+  '<div id="localClientNotice" class="local-client-notice">正在检测本地客户端…</div><div id="rsyncInstallChoices" class="rsync-install-choices" hidden><button type="button" id="downloadSystemRsync">安装到电脑<small>调用系统包管理器，不打开网页；删除软件后仍保留</small></button><button type="button" id="downloadManagedRsync">安装到软件内<small>仅供 Fast GPU 使用，删除软件时会一起删除</small></button></div><div class="sync-direction" role="group" aria-label="同步方向"><button type="button" class="active" data-sync-direction="upload">本地 → 云端</button><button type="button" data-sync-direction="download">云端 → 本地</button></div><div id="localSyncControls" class="sync-paths"><label><span>本地路径</span><div class="sync-path-input"><input id="localSyncPath" placeholder="请选择本地文件夹" aria-label="本地路径" readonly><button type="button" id="browseLocalSyncPath" class="sync-browse-button" aria-label="浏览本地文件夹">浏览</button></div></label><div class="sync-path-arrow" aria-hidden="true">→</div><label><span>云端路径</span><input id="localSyncRemotePath" value="/data/sync" aria-label="云端路径"></label><button type="button" id="runLocalSync" class="sync-run-button">同步到云端</button></div><pre id="localSyncOutput" class="local-sync-output" hidden></pre>';
 $("#syncCommand").after(localSyncRow);
 $("#browseLocalSyncPath").onclick = async function () {
   const localPath = await window.gpuFleetWindow?.pickDirectory?.();
@@ -3307,8 +3533,13 @@ loadClientCapabilities = async function () {
   $("#localSyncControls").hidden = !ready;
   const sshReady = !local || clientCapabilities.ssh;
   $("#sshInstallChoices").hidden = !local || sshReady;
-  $("#openSshTerminal").disabled = !sshReady;
-  $("#uploadScpFile").disabled = !sshReady;
+  const connectionReady = Boolean(
+    currentSshConnection?.instance?.sshReady &&
+      currentSshConnection?.terminalAvailable,
+  );
+  $("#openSshTerminal").disabled = !sshReady || !connectionReady;
+  $("#uploadScpFile").disabled =
+    !sshReady || !currentSshConnection?.instance?.sshReady;
 };
 loadClientCapabilities();
 async function installRsync(scope, button) {
@@ -3402,65 +3633,26 @@ function decorateSshButtons() {
       }),
       actions = card.querySelector(".instance-actions > div");
     if (!instance || !actions) return;
-    let button = actions.querySelector("[data-ssh]"),
-      keyButton = actions.querySelector("[data-ssh-key]");
+    let button = actions.querySelector("[data-ssh]");
     if (!button) {
       button = document.createElement("button");
       button.type = "button";
       button.dataset.ssh = String(instance.id);
       actions.prepend(button, document.createTextNode(" "));
     }
-    if (!keyButton) {
-      keyButton = document.createElement("button");
-      keyButton.type = "button";
-      keyButton.dataset.sshKey = String(instance.id);
-      keyButton.textContent = "下载 SSH Key";
-      button.insertAdjacentElement("afterend", keyButton);
-    }
+    actions.querySelector("[data-ssh-key]")?.remove();
     const accessible = Boolean(instance.sshReady),
       title = accessible
         ? "SSH 公网入口已就绪，可以登录或传输文件"
         : "正在等待 SSH 安装完成并通过公网连接检查";
     if (button.textContent !== "SSH / 文件") button.textContent = "SSH / 文件";
-    button.disabled = !accessible;
-    keyButton.disabled = !instance.platformManaged;
+    button.disabled = false;
+    button.classList.toggle("ssh-loading", !accessible);
+    button.setAttribute("aria-busy", String(!accessible));
     button.title = title;
-    keyButton.title = instance.platformManaged
-      ? "下载平台为该实例自动生成的 SSH 私钥"
-      : title;
   });
+  bindInstanceBenchmarkButtons();
 }
-document.addEventListener("click", async function (event) {
-  const button = event.target.closest("[data-ssh-key]");
-  if (!button) return;
-  const instance = instances.find(
-    (item) => String(item.id) === String(button.dataset.sshKey),
-  );
-  if (!instance) return;
-  setButtonBusy(button, "加密中…");
-  try {
-    if (instance.accessType === "tailscale" && instance.platformManaged) {
-      const keyDownloadUrl =
-          `/api/instances/${encodeURIComponent(instance.id)}/ssh/key?provider=${encodeURIComponent(instance.provider)}`,
-        identityFile =
-          `gpu-fleet-${instance.provider}-${instance.id}`.replace(
-            /[^a-z0-9._-]/gi,
-            "_",
-          ) + ".pem";
-      await secureKeyDownload(keyDownloadUrl, identityFile);
-      toast("SSH 私钥已通过临时加密下载");
-      return;
-    }
-    const ssh = await waitForSshConnection(instance);
-    if (!ssh.keyDownloadUrl) throw Error("该主机没有可下载的托管 SSH 私钥");
-    await secureKeyDownload(ssh.keyDownloadUrl, ssh.identityFile);
-    toast("SSH 私钥已通过临时密钥加密下载");
-  } catch (error) {
-    toast("私钥下载失败：" + error.message);
-  } finally {
-    clearButtonBusy(button);
-  }
-});
 function applyInstanceLifecycleLabels() {
   document.querySelectorAll(".instance").forEach((card) => {
     const id = card.querySelector("[data-action]")?.dataset.id,
@@ -3490,6 +3682,32 @@ document.addEventListener("click", async function (event) {
     return String(item.id) === String(button.dataset.ssh);
   });
   if (!instance) return;
+  if (!instance.sshReady) {
+    const keyDownloadUrl = instance.platformManaged
+        ? `/api/instances/${encodeURIComponent(instance.id)}/ssh/key?provider=${encodeURIComponent(instance.provider)}`
+        : "",
+      identityFile =
+        `gpu-fleet-${instance.provider}-${instance.id}`.replace(
+          /[^a-z0-9._-]/gi,
+          "_",
+        ) + ".pem";
+    currentSshCommand = "";
+    currentSshConnection = {
+      instance,
+      keyDownloadUrl,
+      identityFile,
+      terminalAvailable: false,
+    };
+    $("#sshConnectionDetails").innerHTML =
+      '<div class="ssh-pending-state"><strong>SSH 正在准备中</strong><small>实例入口就绪后即可打开平台终端，请稍候。</small></div>';
+    $("#downloadSshKey").hidden = !keyDownloadUrl;
+    $("#copySshCommand").disabled = true;
+    $("#openSshTerminal").hidden = false;
+    $("#openSshTerminal").disabled = true;
+    $("#uploadScpFile").disabled = true;
+    sshDialog.showModal();
+    return;
+  }
   setButtonBusy(button, "等待 SSH…");
   try {
     const ssh = await waitForSshConnection(instance);
@@ -3513,7 +3731,13 @@ document.addEventListener("click", async function (event) {
       esc(ssh.command) +
       "</code></div>";
     $("#downloadSshKey").hidden = !ssh.keyDownloadUrl;
-    $("#openSshTerminal").hidden = !ssh.terminalAvailable;
+    $("#copySshCommand").disabled = false;
+    $("#openSshTerminal").hidden = false;
+    $("#openSshTerminal").disabled =
+      !ssh.terminalAvailable ||
+      (clientCapabilities.mode === "local" && !clientCapabilities.ssh);
+    $("#uploadScpFile").disabled =
+      clientCapabilities.mode === "local" && !clientCapabilities.ssh;
     updateSyncCommand();
     sshDialog.showModal();
   } catch (error) {
@@ -3539,7 +3763,7 @@ function updateSyncCommand() {
   }
   const local = $("#localSyncPath").value.trim();
   if (!local || !isAbsoluteLocalPath(local)) {
-    $("#syncCommand").textContent = "本地路径必须是绝对路径。";
+    $("#syncCommand").textContent = "";
     return;
   }
   const
@@ -3581,7 +3805,7 @@ $("#runLocalSync").onclick = async function () {
     remoteDir = resolvedSyncDirectory();
   if (!localPath) return toast("请输入本地目录");
   if (!isAbsoluteLocalPath(localPath))
-    return toast("本地路径必须是绝对路径");
+    return toast("请重新选择本地目录");
   if (!updateSyncDirectoryHint() || !remoteDir)
     return toast("平台终端外云端路径必须是绝对路径");
   if (!/^\/[a-zA-Z0-9._/-]+$/.test(remoteDir) || remoteDir.includes(".."))
@@ -3615,10 +3839,12 @@ $("#runLocalSync").onclick = async function () {
   }
 };
 let selectedScpFiles = [],
-  collapsedScpFolders = new Set();
-function scpTree() {
+  collapsedScpFolders = new Set(),
+  nextScpBatchId = 1;
+function scpTree(indexes = selectedScpFiles.map((item, index) => index)) {
   const root = { children: new Map() };
-  selectedScpFiles.forEach((item, index) => {
+  indexes.forEach((index) => {
+    const item = selectedScpFiles[index];
     let node = root;
     const parts = item.relativePath.split("/");
     parts.forEach((part, partIndex) => {
@@ -3635,7 +3861,7 @@ function scpTree() {
   });
   return root;
 }
-function renderScpNodes(node) {
+function renderScpNodes(node, batchId) {
   return [...node.children.values()]
     .map((child) => {
       if (child.index != null) {
@@ -3644,39 +3870,61 @@ function renderScpNodes(node) {
       }
       const indexes = selectedScpFiles
           .map((item, index) =>
-            item.relativePath.startsWith(child.path + "/") ? index : -1,
+            item.batchId === batchId &&
+            item.relativePath.startsWith(child.path + "/")
+              ? index
+              : -1,
           )
           .filter((index) => index >= 0),
         checked = indexes.every((index) => selectedScpFiles[index].selected),
         partial =
           !checked && indexes.some((index) => selectedScpFiles[index].selected),
         folderPath = esc(child.path),
-        open = !collapsedScpFolders.has(child.path);
-      return `<details data-scp-details="${folderPath}" ${open ? "open" : ""}><summary><span class="selection-folder-chevron" aria-hidden="true"></span><input type="checkbox" data-scp-folder="${folderPath}" ${checked ? "checked" : ""} ${partial ? 'data-indeterminate="true"' : ""}><span>📁 ${esc(child.name)}</span><span class="selection-folder-state"><b class="expanded-label">已展开</b><b class="collapsed-label">已折叠</b></span><small>${indexes.length} 项</small><span class="selection-actions"><button type="button" data-scp-select-folder="${folderPath}">全选</button><button type="button" data-scp-unselect-folder="${folderPath}">全不选</button><button type="button" class="selection-remove" data-scp-remove-folder="${folderPath}">移除</button></span></summary><div>${renderScpNodes(child)}</div></details>`;
+        detailsKey = `${batchId}:${child.path}`,
+        open = !collapsedScpFolders.has(detailsKey);
+      return `<details data-scp-details="${esc(detailsKey)}" ${open ? "open" : ""}><summary><span class="selection-folder-chevron" aria-hidden="true"></span><input type="checkbox" data-scp-folder="${folderPath}" data-scp-batch="${batchId}" ${checked ? "checked" : ""} ${partial ? 'data-indeterminate="true"' : ""}><span>📁 ${esc(child.name)}</span><span class="selection-folder-state"><b class="expanded-label">已展开</b><b class="collapsed-label">已折叠</b></span><small>${indexes.length} 项</small><span class="selection-actions"><button type="button" data-scp-select-folder="${folderPath}" data-scp-batch="${batchId}">全选</button><button type="button" data-scp-unselect-folder="${folderPath}" data-scp-batch="${batchId}">全不选</button><button type="button" class="selection-remove" data-scp-remove-folder="${folderPath}" data-scp-batch="${batchId}">移除</button></span></summary><div>${renderScpNodes(child, batchId)}</div></details>`;
     })
     .join("");
+}
+function scpBatchLabel(position) {
+  const numerals = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
+  return numerals[position] || String(position + 1);
 }
 function showScpSelection() {
   const chosen = selectedScpFiles.filter((item) => item.selected),
     bytes = chosen.reduce((sum, item) => sum + item.file.size, 0),
-    tree = $("#scpSelectionTree");
+    tree = $("#scpSelectionTree"),
+    batchIds = [...new Set(selectedScpFiles.map((item) => item.batchId))],
+    batches = batchIds
+      .map((batchId, position) => {
+        const indexes = selectedScpFiles
+            .map((item, index) => (item.batchId === batchId ? index : -1))
+            .filter((index) => index >= 0),
+          selectedCount = indexes.filter(
+            (index) => selectedScpFiles[index].selected,
+          ).length;
+        return `<section class="selection-batch" aria-label="批次${scpBatchLabel(position)}"><div class="selection-batch-head"><strong><span class="selection-batch-number">${position + 1}</span>批次${scpBatchLabel(position)}</strong><small>已选 ${selectedCount}/${indexes.length} 个文件</small></div><div class="selection-batch-content">${renderScpNodes(scpTree(indexes), batchId)}</div></section>`;
+      })
+      .join("");
   $("#scpFileLabel").textContent = selectedScpFiles.length
     ? `已选 ${chosen.length}/${selectedScpFiles.length} 个文件 · ${(bytes / 1024 / 1024).toFixed(1)} MB`
     : "尚未选择内容";
   tree.hidden = !selectedScpFiles.length;
   tree.innerHTML = selectedScpFiles.length
-    ? `<div class="selection-tree-head"><strong>上传内容</strong><span class="selection-actions"><button type="button" data-scp-select-all>全选</button><button type="button" data-scp-unselect-all>全不选</button><button type="button" class="selection-remove" data-scp-clear>清空</button></span></div>${renderScpNodes(scpTree())}`
+    ? `<div class="selection-tree-head"><strong>上传内容 · ${batchIds.length} 个批次</strong><span class="selection-actions"><button type="button" data-scp-select-all>全选</button><button type="button" data-scp-unselect-all>全不选</button><button type="button" class="selection-remove" data-scp-clear>清空</button></span></div><div class="selection-batches">${batches}</div>`
     : "";
   tree
     .querySelectorAll('[data-indeterminate="true"]')
     .forEach((input) => (input.indeterminate = true));
 }
 function addScpFiles(files) {
+  const batchId = nextScpBatchId++;
   const additions = files
     .filter((item) => item?.file)
     .map((item) => ({
       ...item,
       relativePath: item.relativePath.replaceAll("\\", "/"),
+      batchId,
       selected: true,
       uploaded: false,
     }));
@@ -3691,14 +3939,18 @@ function addScpFiles(files) {
 }
 $("#scpSelectionTree").onchange = (event) => {
   const fileIndex = event.target.dataset.scpFile,
-    folder = event.target.dataset.scpFolder;
+    folder = event.target.dataset.scpFolder,
+    batchId = Number(event.target.dataset.scpBatch);
   if (fileIndex != null) {
     const item = selectedScpFiles[Number(fileIndex)];
     item.selected = event.target.checked;
     if (item.selected) item.uploaded = false;
   } else if (folder != null)
     selectedScpFiles.forEach((item) => {
-      if (item.relativePath.startsWith(folder + "/")) {
+      if (
+        item.batchId === batchId &&
+        item.relativePath.startsWith(folder + "/")
+      ) {
         item.selected = event.target.checked;
         if (item.selected) item.uploaded = false;
       }
@@ -3733,19 +3985,26 @@ $("#scpSelectionTree").onclick = (event) => {
     $("#scpFolder").value = "";
   } else if (button.dataset.scpSelectFolder != null)
     selectedScpFiles.forEach((item) => {
-      if (item.relativePath.startsWith(button.dataset.scpSelectFolder + "/")) {
+      if (
+        item.batchId === Number(button.dataset.scpBatch) &&
+        item.relativePath.startsWith(button.dataset.scpSelectFolder + "/")
+      ) {
         item.selected = true;
         item.uploaded = false;
       }
     });
   else if (button.dataset.scpUnselectFolder != null)
     selectedScpFiles.forEach((item) => {
-      if (item.relativePath.startsWith(button.dataset.scpUnselectFolder + "/"))
+      if (
+        item.batchId === Number(button.dataset.scpBatch) &&
+        item.relativePath.startsWith(button.dataset.scpUnselectFolder + "/")
+      )
         item.selected = false;
     });
   else if (button.dataset.scpRemoveFolder != null)
     selectedScpFiles = selectedScpFiles.filter(
       (item) =>
+        item.batchId !== Number(button.dataset.scpBatch) ||
         !item.relativePath.startsWith(button.dataset.scpRemoveFolder + "/"),
     );
   else if (button.dataset.scpRemoveFile != null)
@@ -3922,6 +4181,65 @@ const storageProviderFields = {
     hint: "#ossHint",
   },
 };
+for (const field of [
+  {
+    ids: ["#r2Bucket", "#ossBucket"],
+    label: "Bucket Name",
+    placeholder: "请输入 Bucket Name",
+    description: "对象存储 Bucket Name",
+  },
+  {
+    ids: ["#r2AccessKey", "#ossAccessKey"],
+    label: "S3 Access Key ID（对象存储凭据）",
+    placeholder: "请输入 S3 Access Key ID",
+    description: "S3 Access Key ID（对象存储凭据，不是云账号或登录邮箱）",
+  },
+  {
+    ids: ["#r2SecretKey", "#ossSecretKey"],
+    label: "S3 Secret Access Key（对象存储凭据）",
+    placeholder: "请输入 S3 Secret Access Key",
+    description:
+      "S3 Secret Access Key（对象存储凭据，不是云账号登录密码）",
+  },
+])
+  for (const id of field.ids) {
+    const input = $(id),
+    labelText = [...input.closest("label").childNodes].find(
+      (node) => node.nodeType === Node.TEXT_NODE,
+    );
+    if (labelText) labelText.textContent = field.label;
+    input.placeholder = field.placeholder;
+    input.setAttribute("aria-label", field.description);
+  }
+for (const provider of [
+  {
+    id: "r2",
+    url: "https://dash.cloudflare.com/?to=/:account/r2",
+    windowName: "gpu-fleet-cloudflare-r2",
+    label: "打开 R2 控制台",
+  },
+  {
+    id: "oss",
+    url: "https://oss.console.aliyun.com/overview",
+    windowName: "gpu-fleet-aliyun-oss",
+    label: "打开 OSS 控制台",
+  },
+]) {
+  const legend = document.querySelector(
+      `[data-storage-provider="${provider.id}"] legend`,
+    ),
+    toggle = legend.querySelector(".storage-toggle"),
+    actions = document.createElement("span"),
+    button = document.createElement("button");
+  actions.className = "storage-provider-actions";
+  button.type = "button";
+  button.className = "storage-console-link";
+  button.textContent = "打开控制台 ↗";
+  button.setAttribute("aria-label", provider.label);
+  button.onclick = () => openProviderWindow(provider.url, provider.windowName);
+  actions.append(button, toggle);
+  legend.append(actions);
+}
 $("#r2Region").disabled = true;
 $("#r2Region").classList.add("fixed-storage-value");
 $("#r2Region").insertAdjacentHTML(
@@ -4104,6 +4422,139 @@ $("#ossRegion").onchange = function () {
     ? `https://oss-${this.value}.aliyuncs.com`
     : "";
 };
+function createSearchableSelect(select) {
+  const root = document.createElement("div"),
+    trigger = document.createElement("button"),
+    popup = document.createElement("div"),
+    search = document.createElement("input"),
+    list = document.createElement("div"),
+    empty = document.createElement("div");
+  root.className = "searchable-select";
+  trigger.type = "button";
+  trigger.className = "searchable-select-trigger";
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+  popup.className = "searchable-select-popup";
+  popup.hidden = true;
+  search.type = "search";
+  search.className = "searchable-select-search";
+  search.placeholder = "搜索地区或 Region ID";
+  search.setAttribute("aria-label", "搜索阿里云 OSS 地区");
+  list.className = "searchable-select-list";
+  list.setAttribute("role", "listbox");
+  empty.className = "searchable-select-empty";
+  empty.textContent = "没有匹配的地区";
+  empty.hidden = true;
+  popup.append(search, list, empty);
+  root.append(trigger, popup);
+  select.classList.add("searchable-select-native");
+  select.after(root);
+
+  function options() {
+    return [...select.options].map((option) => ({
+      value: option.value,
+      label: option.textContent.trim(),
+      group:
+        option.parentElement?.tagName === "OPTGROUP"
+          ? option.parentElement.label
+          : "",
+    }));
+  }
+  function syncTrigger() {
+    const selected = select.selectedOptions[0];
+    trigger.innerHTML = `<span>${esc(selected?.textContent.trim() || "请选择区域")}</span><i aria-hidden="true"></i>`;
+  }
+  function render(query = "") {
+    const normalized = query.trim().toLocaleLowerCase(),
+      matches = options().filter(
+        ({ label, value, group }) =>
+          !normalized ||
+          `${label} ${value} ${group}`.toLocaleLowerCase().includes(normalized),
+      );
+    list.innerHTML = "";
+    let lastGroup = null;
+    for (const item of matches) {
+      if (item.group && item.group !== lastGroup) {
+        const heading = document.createElement("div");
+        heading.className = "searchable-select-group";
+        heading.textContent = item.group;
+        list.append(heading);
+        lastGroup = item.group;
+      }
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "searchable-select-option";
+      row.dataset.value = item.value;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", String(item.value === select.value));
+      row.innerHTML = `<span>${esc(item.label)}</span>${item.value ? `<small>${esc(item.value)}</small>` : ""}`;
+      row.onclick = () => {
+        select.value = item.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        syncTrigger();
+        close();
+      };
+      list.append(row);
+    }
+    empty.hidden = matches.length > 0;
+  }
+  function positionPopup() {
+    const rect = trigger.getBoundingClientRect(),
+      gap = 6,
+      viewportGap = 12,
+      below = window.innerHeight - rect.bottom - gap - viewportGap,
+      above = rect.top - gap - viewportGap,
+      maxHeight = Math.max(180, Math.min(380, Math.max(below, above))),
+      openAbove = below < 220 && above > below,
+      popupWidth = Math.min(
+        Math.max(rect.width, 300),
+        window.innerWidth - viewportGap * 2,
+      );
+    popup.style.left = `${Math.max(viewportGap, Math.min(rect.left, window.innerWidth - popupWidth - viewportGap))}px`;
+    popup.style.width = `${popupWidth}px`;
+    popup.style.maxHeight = `${maxHeight}px`;
+    popup.style.top = openAbove ? "auto" : `${rect.bottom + gap}px`;
+    popup.style.bottom = openAbove
+      ? `${window.innerHeight - rect.top + gap}px`
+      : "auto";
+  }
+  function open() {
+    popup.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    search.value = "";
+    render();
+    positionPopup();
+    requestAnimationFrame(() => search.focus());
+  }
+  function close() {
+    popup.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+  }
+  trigger.onclick = () => (popup.hidden ? open() : close());
+  search.oninput = () => render(search.value);
+  root.onkeydown = (event) => {
+    if (event.key === "Escape") {
+      close();
+      trigger.focus();
+    }
+  };
+  document.addEventListener("pointerdown", (event) => {
+    if (!root.contains(event.target)) close();
+  });
+  window.addEventListener("resize", () => !popup.hidden && positionPopup());
+  window.addEventListener(
+    "scroll",
+    () => !popup.hidden && positionPopup(),
+    true,
+  );
+  select.addEventListener("change", syncTrigger);
+  new MutationObserver(syncTrigger).observe(select, {
+    childList: true,
+    subtree: true,
+  });
+  syncTrigger();
+}
+createSearchableSelect($("#ossRegion"));
 $("#s3Form").onsubmit = async function (event) {
   event.preventDefault();
   const button = event.currentTarget.querySelector("button");

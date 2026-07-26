@@ -105,3 +105,249 @@
   }
 }
 .provider-key-item code{font-family:inherit;font-size:14px;font-weight:600;letter-spacing:0;line-height:1.4;color:inherit}
+
+/* Hyperstack deployment form: keep related resources on one row and give
+   credentials a separate, calmer row. These overrides intentionally live
+   after the legacy form rules above. */
+#hyperstackConfigForm {
+  width: min(880px, 100%);
+  padding: 20px;
+  border-radius: 12px;
+}
+
+#hyperstackConfigForm label {
+  gap: 7px;
+  min-width: 0;
+  color: #34433b;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+#hyperstackConfigForm select,
+#hyperstackConfigForm input {
+  min-width: 0;
+  padding: 11px 12px;
+  border-color: #d9e1dc;
+  border-radius: 8px;
+  color: var(--ink);
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+#hyperstackConfigForm select:focus,
+#hyperstackConfigForm input:focus {
+  outline: 0;
+  border-color: #55b87c;
+  box-shadow: 0 0 0 3px #25c46a1c;
+}
+
+.hyperstack-config-head {
+  gap: 16px;
+}
+
+.hyperstack-config-head > strong {
+  font-size: 16px;
+}
+
+.hyperstack-config-head button {
+  padding: 8px 11px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.hyperstack-config-body {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.hyperstack-config-body > label {
+  grid-column: span 2;
+}
+
+.hyperstack-config-body > label:has(#hyperstackImageUser),
+.hyperstack-config-body > label:has(#hyperstackTailscaleAuthKey) {
+  grid-column: span 3;
+}
+
+.hyperstack-config-body > label:has(#hyperstackAgentCidr)[hidden] {
+  display: none;
+}
+
+.hyperstack-config-body > button[type="submit"] {
+  grid-column: 1 / -1;
+  justify-self: end;
+  min-width: 180px;
+  margin-top: 2px;
+}
+
+#hyperstackTailscaleKeyStatus,
+#hyperstackConfigStatus {
+  grid-column: 1 / -1;
+  margin: -3px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.hyperstack-config-summary {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #e9f7ee;
+}
+
+@media (max-width: 900px) {
+  .hyperstack-config-body {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .hyperstack-config-body > label,
+  .hyperstack-config-body > label:has(#hyperstackImageUser),
+  .hyperstack-config-body > label:has(#hyperstackTailscaleAuthKey),
+  .hyperstack-config-body > button,
+  .hyperstack-config-body > small {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  #hyperstackConfigForm {
+    padding: 16px;
+  }
+
+  .hyperstack-config-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .hyperstack-config-head-actions {
+    width: 100%;
+  }
+
+  .hyperstack-config-head-actions button {
+    flex: 1;
+  }
+
+  .hyperstack-config-body > button[type="submit"] {
+    width: 100%;
+  }
+}
+
+.provider-key-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#launchKeyPortal {
+  color: #17683d;
+  border-color: #b8d9c5;
+}
+
+.hyperstack-field-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+#hyperstackConfigForm .field-link-button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #17683d;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#hyperstackConfigForm .field-link-button:hover {
+  text-decoration: underline;
+}
+
+#hyperstackConfigForm .field-link-button:disabled {
+  color: #8b9a92;
+  cursor: wait;
+  text-decoration: none;
+}
+
+.tailscale-auth-key-hint {
+  display: grid;
+  gap: 2px;
+  padding: 9px 10px;
+  border: 1px solid #cce5d5;
+  border-radius: 7px;
+  background: #f1faf4;
+  color: #476056;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.tailscale-auth-key-hint strong {
+  color: #17683d;
+  font-size: 12px;
+}
+
+.tailscale-auth-key-hint code {
+  color: #17683d;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-weight: 700;
+}
+
+.tailscale-key-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px;
+  align-items: end;
+  gap: 10px;
+}
+
+.tailscale-reusable-confirm {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  color: #34433b;
+  font-size: 12px;
+}
+
+#hyperstackConfigForm .tailscale-reusable-confirm input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #25a85e;
+}
+
+.tailscale-expiry-field {
+  display: grid;
+  gap: 5px;
+  color: #5c6b63;
+  font-size: 11px;
+}
+
+#hyperstackTailscaleKeyStatus[data-state="expiring"] {
+  color: #9a6500;
+  font-weight: 700;
+}
+
+#hyperstackTailscaleKeyStatus[data-state="expired"] {
+  color: #b13838;
+  font-weight: 700;
+}
+
+@media (max-width: 560px) {
+  .provider-key-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .provider-key-head-actions {
+    width: 100%;
+  }
+
+  .provider-key-head-actions button {
+    flex: 1;
+  }
+
+  .tailscale-key-meta {
+    grid-template-columns: 1fr;
+  }
+}
