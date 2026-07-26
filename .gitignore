@@ -1,2 +1,77 @@
-.data/
+# Dependencies
+node_modules/
+jspm_packages/
 
+# Build output / electron artifacts
+dist/
+build/
+out/
+release/
+.next/
+.nuxt/
+.svelte-kit/
+*.tsbuildinfo
+*.exe
+*.dll
+*.node
+*.pdb
+*.app
+*.dmg
+*.AppImage
+*.snap
+*.deb
+*.rpm
+*.msi
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Caches
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+.turbo/
+.rollup.cache/
+
+# Runtime / data
+.data/
+.env
+.env.local
+.env.*.local
+*.pid
+*.seed
+*.pid.lock
+
+# Test / coverage
+coverage/
+*.lcov
+.nyc_output/
+
+# IDE / editors
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.history/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# Lockfiles
+pnpm-lock.yaml

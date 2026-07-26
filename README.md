@@ -4,6 +4,51 @@ Fast GPU Console 是一个跨云 GPU 调度与验收平台。目前接入 PPIO�
 
 > 继续调研或替换厂商前，请先阅读 [GPU 云厂商选型要求与淘汰记录](PROVIDER_SELECTION_REQUIREMENTS.md)，避免重复推荐已淘汰厂商。接入适配器不代表厂商已经通过最终付款、容量和实机验收。
 
+## 快速启动
+
+首次运行需要先安装依赖、配置环境变量，再选择启动方式。下面按 Windows / PowerShell 给出步骤。
+
+### 1. 环境要求
+
+- Node.js **22.5 或更高版本**（见 `package.json` 的 `engines.node`）。
+- 首次安装依赖会下载 Electron 二进制（约 200MB），并本地编译 `node-pty` 原生模块，请确保网络通畅，并且系统已安装编译工具链（Windows 上需要 Visual Studio Build Tools 与 Python，即 `npm config set msvs_version 2019` 这类原生模块构建所需的工具）。
+
+### 2. 安装依赖
+
+```powershell
+npm install
+```
+
+这一步会读取 `package.json` 与 `package-lock.json`，安装运行依赖（`node-pty`、`@xterm/xterm`、`@xterm/addon-fit`）与开发依赖（`electron`）。完成后会生成 `node_modules/`，该目录已被 `.gitignore` 忽略，不要提交。
+
+### 3. 配置环境变量
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+按实际情况填入各厂商 API key 与平台配置。`.env` 已被忽略，密钥不要提交。完整变量列表见 [.env.example](.env.example)。
+
+### 4. 选择启动方式
+
+| 场景 | 命令 | 说明 |
+| --- | --- | --- |
+| 本机一体化（推荐首次试用） | `npm run start:all` | 通过 Electron 一次性启动控制面 + 本地客户端窗口，无需浏览器 |
+| 仅网页端 | `npm run start:web` | 启动服务端，浏览器访问 <http://localhost:4173> |
+| 仅本地客户端 | `npm run start:local` | 单独打开连接指定控制面的客户端窗口 |
+
+首次运行 `start:all` 会创建 `.data/local-client.key` 与 `.data/local-fleet.sqlite`，请备份这两个文件。
+
+### 5. 验证安装
+
+```powershell
+npm test
+npm run check
+```
+
+全部通过即代表依赖与运行时环境正常。
+
 ## 当前功能
 
 ### GPU 市场与厂商接入
@@ -167,7 +212,7 @@ npm run start:all
 
 实例首次装机始终以 SSH 为引导通道：供应商启动命令只确保 `sshd` 存在并运行，平台在真实 SSH 握手成功后上传并执行本地 `bootstrap.sh` 与 Agent 文件。因此 SSH 模式不要求公网控制面地址。也可以在“平台设置”中切换为 Cloudflare Named Tunnel，并手动填写固定 HTTPS `BASE_URL`；Tunnel 只用于 Agent 遥测、心跳和受限的轻量接口，不参与首次安装。平台不创建临时 Tunnel；本地客户端会检测并安装 `cloudflared`，通过浏览器完成 `cloudflared tunnel login` 授权，创建或复用与域名对应的 Named Tunnel，将 DNS 路由到本机平台端口。
 
-要求 Node.js 20+。项目没有第三方 npm 运行依赖。
+要求 Node.js 22.5+。首次运行需先执行 `npm install` 安装依赖（见上方「快速启动」），运行依赖包括 `node-pty`、`@xterm/xterm`、`@xterm/addon-fit`，桌面窗口另需开发依赖 `electron`。
 
 ```powershell
 $env:PPIO_API_KEY="..."
