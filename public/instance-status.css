@@ -26,10 +26,10 @@
 .instance-top .pill.running,
 .instance-top .pill.ready { color: #147f46; background: #ecf9f1; border-color: #c9edd8; }
 .instance-top .pill.provisioning,
-.instance-top .pill.starting { color: #94600a; background: #fff7e6; border-color: #f3dfad; }
+.instance-top .pill.starting,
+.instance-top .pill.failed { color: #94600a; background: #fff7e6; border-color: #f3dfad; }
 .instance-top .pill.stopped,
 .instance-top .pill.stopping { color: #68736d; background: #f2f4f3; border-color: #dfe4e1; }
-.instance-top .pill.failed,
 .instance-top .pill.terminating { color: #b23b35; background: #fff0ef; border-color: #f1cfcc; }
 .instance-toolbar {
   display: flex;

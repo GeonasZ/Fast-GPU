@@ -12,7 +12,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl jq pciutils git python3 python3-pip openssh-server iproute2 tini \
-      fio iperf3 nvme-cli cmake build-essential rclone \
+      fio iperf3 nvme-cli cmake build-essential rclone rsync \
       libboost-program-options-dev \
  && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \

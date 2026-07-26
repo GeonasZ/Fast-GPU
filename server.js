@@ -3769,7 +3769,13 @@ async function api(req, res, url) {
       throw Object.assign(Error("本地 rsync 只支持托管私钥实例"), {
         status: 409,
       });
-    const localPath = path.resolve(String(d.localPath || "")),
+    const requestedLocalPath = String(d.localPath || "").trim();
+    if (!path.isAbsolute(requestedLocalPath))
+      throw Object.assign(Error("本地路径必须是绝对路径"), {
+        status: 400,
+        code: "local_path_must_be_absolute",
+      });
+    const localPath = path.normalize(requestedLocalPath),
       remoteDir = String(d.remoteDir || "/data/sync").trim(),
       direction = d.direction === "download" ? "download" : "upload";
     if (!fs.existsSync(localPath) || !fs.statSync(localPath).isDirectory())
@@ -3793,7 +3799,42 @@ async function api(req, res, url) {
               : windowsLocalPath.replace(/\\/g, "/") + "/"
             : windowsLocalPath + path.sep,
         remoteRsyncPath = `${managed.username}@${managed.host}:${remoteDir}/`,
-        ssh = `ssh -i "${keyFile}" -p ${managed.port} -o BatchMode=yes -o StrictHostKeyChecking=accept-new`;
+        sshCommand = executablePath("ssh") || "ssh",
+        ssh = `"${sshCommand}" -i "${keyFile}" -p ${managed.port} -o BatchMode=yes -o StrictHostKeyChecking=accept-new`;
+      const remoteRsyncSetup =
+        "command -v rsync >/dev/null 2>&1 || { " +
+        "if command -v apt-get >/dev/null 2>&1; then " +
+        "if [ \"$(id -u)\" = 0 ]; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends rsync; " +
+        "elif command -v sudo >/dev/null 2>&1; then sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends rsync; else exit 126; fi; " +
+        "elif command -v apk >/dev/null 2>&1; then if [ \"$(id -u)\" = 0 ]; then apk add --no-cache rsync; else sudo apk add --no-cache rsync; fi; " +
+        "elif command -v dnf >/dev/null 2>&1; then if [ \"$(id -u)\" = 0 ]; then dnf install -y rsync; else sudo dnf install -y rsync; fi; " +
+        "elif command -v yum >/dev/null 2>&1; then if [ \"$(id -u)\" = 0 ]; then yum install -y rsync; else sudo yum install -y rsync; fi; " +
+        "else exit 127; fi; }; command -v rsync >/dev/null 2>&1";
+      try {
+        await runCommand(
+          sshCommand,
+          [
+            "-i",
+            keyFile,
+            "-p",
+            String(managed.port),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            `${managed.username}@${managed.host}`,
+            remoteRsyncSetup,
+          ],
+          { timeout: 10 * 60 * 1000, killSignal: "SIGKILL" },
+        );
+      } catch (cause) {
+        throw Object.assign(
+          Error(
+            "云端实例缺少 rsync，自动安装失败。请用平台终端安装 rsync 后重试。",
+          ),
+          { status: 502, code: "remote_rsync_unavailable", cause },
+        );
+      }
       const output = await runCommand(rsyncCommand, [
         "-avz",
         "--partial",

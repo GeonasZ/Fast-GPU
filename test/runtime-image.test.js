@@ -34,11 +34,21 @@ test('bootstrap installs dependencies for an on-demand image and checks the clou
   assert.match(bootstrap, /install_runtime_dependencies/);
   assert.match(bootstrap, /profile failed failed/);
   assert.match(bootstrap, /installing_runtime_dependencies/);
+  assert.match(bootstrap, /rclone rsync/);
   assert.match(bootstrap, /npm install -g/);
   assert.doesNotMatch(bootstrap, /FLEET_VERIFY_GPU=1 \/opt\/gpu-fleet\/verify-image\.sh/);
   assert.match(bootstrap, /command -v nvidia-smi/);
   assert.match(bootstrap, /nvidia-smi >\/dev\/null/);
   assert.match(bootstrap, /torch\.cuda\.is_available/);
+});
+
+test('rsync is available on new runtimes and repaired on existing instances', () => {
+  const dockerfile = read('Dockerfile.runtime');
+  const server = read('server.js');
+  assert.match(dockerfile, /rclone rsync/);
+  assert.match(server, /command -v rsync/);
+  assert.match(server, /remote_rsync_unavailable/);
+  assert.match(server, /apt-get install -y --no-install-recommends rsync/);
 });
 
 test('runtime repository derives all supported prebuilt image tags', () => {
@@ -266,6 +276,9 @@ test('provider running state stays green while platform initialization remains v
   assert.match(app, /const sshMarkup = instance\.sshDiagnostic\?\.message/);
   assert.match(app, /i\.lifecycleAction\s*===\s*["']delete["'][\s\S]*["']terminating["']/);
   assert.match(app, /右上角状态必须一直使用红色 terminating/);
+  assert.match(app, /canStart\s*=\s*\["stopped",\s*"stopping"\]\.includes\(visualStatus\)/);
+  assert.match(app, /state\s*===\s*["']stopping["']\s*\?\s*["']启动["']/);
+  assert.match(app, /生命周期按钮必须跟右上角的派生状态使用同一口径/);
   assert.match(app, /正在安装构建工具与运行依赖/);
   assert.match(app, /正在安装开发工具/);
 });

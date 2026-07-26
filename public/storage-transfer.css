@@ -42,7 +42,7 @@
 .picker-menu[hidden] { display: none; }
 .picker-menu button { display: block; width: 100%; border: 0; text-align: left; background: transparent; }
 .picker-menu button:hover { background: #edf5f0; }
-.transfer-destination progress { width: 100%; align-self: center; }
+.transfer-destination progress { width: 100%; height: 10px; align-self: center; overflow: hidden; border: 0; border-radius: 999px; accent-color: #25a95c; }
 .remote-directory-hint { display: grid; grid-column: 1 / -1; grid-template-rows: repeat(2, 1.35em); min-height: 2.7em; margin-top: -3px; color: var(--muted); font-size: 11px; line-height: 1.35; }
 .remote-directory-hint span { display: block; min-width: 0; overflow-wrap: anywhere; }
 .remote-directory-hint.relative { color: #176535; }
@@ -93,11 +93,22 @@
 .sync-direction { display: inline-flex; gap: 3px; margin: 2px 0 10px; padding: 3px; border-radius: 8px; background: #e9eeeb; }
 .sync-direction button { padding: 7px 13px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; }
 .sync-direction button.active { color: #fff; background: var(--dark); }
-.sync-paths { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.sync-paths { display: grid; grid-template-columns: minmax(0, 1.15fr) 28px minmax(0, 1fr); gap: 12px; align-items: end; }
 .sync-paths label { display: grid; gap: 5px; min-width: 0; color: var(--muted); font-size: 11px; }
-.sync-paths input { min-width: 0; width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid var(--line); border-radius: 7px; }
-.sync-path-input { display: flex; gap: 5px; min-width: 0; }
-.sync-path-arrow { align-self: end; padding: 9px 2px; color: var(--muted); font-weight: 700; }
+.sync-paths input { min-width: 0; width: 100%; box-sizing: border-box; min-height: 40px; padding: 9px 11px; border: 1px solid #c7d2cc; border-radius: 9px; background: #fff; transition: border-color .15s ease, box-shadow .15s ease; }
+.sync-paths input:focus { border-color: #23814b; outline: 0; box-shadow: 0 0 0 3px #23814b1f; }
+.sync-path-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; min-width: 0; }
+.sync-path-arrow { align-self: end; padding: 10px 2px; color: #6b7e74; font-weight: 800; text-align: center; }
+.sync-browse-button, .sync-run-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; border-radius: 9px; font: inherit; font-weight: 700; cursor: pointer; transition: transform .15s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease; }
+.sync-browse-button { min-width: 88px; padding: 9px 13px; border: 1px solid #b8c8bf; background: #fff; color: #244332; box-shadow: 0 1px 2px #14281d12; }
+.sync-browse-button::before { content: "▣"; font-size: 12px; }
+.sync-browse-button:hover:not(:disabled) { border-color: #6e9b81; background: #f0f7f3; transform: translateY(-1px); }
+.sync-run-button { grid-column: 1 / -1; justify-self: end; min-width: 150px; margin-top: 2px; padding: 10px 18px; border: 1px solid #0d4b29; background: linear-gradient(180deg, #197b43, #126637); color: #fff; box-shadow: 0 5px 14px #1266372b; }
+.sync-run-button::before { content: "⇅"; font-size: 15px; }
+.sync-run-button.busy::before { content: ""; width: 12px; height: 12px; border: 2px solid #ffffff70; border-top-color: #fff; border-radius: 50%; animation: sync-spin .7s linear infinite; }
+@keyframes sync-spin { to { transform: rotate(360deg); } }
+.sync-run-button:hover:not(:disabled) { border-color: #0b3d22; background: linear-gradient(180deg, #218b4e, #176f3d); transform: translateY(-1px); box-shadow: 0 7px 18px #12663735; }
+.sync-browse-button:disabled, .sync-run-button:disabled { border-color: #cbd4cf; background: #e5e9e7; color: #849088; cursor: not-allowed; box-shadow: none; }
 .local-sync-output { max-height: 180px; overflow: auto; padding: 10px; border-radius: 7px; background: #08110d; color: #ccebd8; white-space: pre-wrap; }
 .fixed-storage-value:disabled { color: #17613b; background: #edf8f1; border-color: #b9ddc7; opacity: 1; cursor: not-allowed; font-weight: 700; }
 .fixed-storage-hint { color: #5f8b70; }

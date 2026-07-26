@@ -11,7 +11,9 @@ test('SSH terminal exposes configurable clipboard and editing shortcuts', () => 
   assert.match(app, /event\.ctrlKey\s*&&\s*event\.shiftKey\s*&&\s*key\s*===\s*["']c["']/);
   assert.match(app, /event\.ctrlKey\s*&&\s*event\.shiftKey\s*&&\s*key\s*===\s*["']v["']/);
   assert.match(app, /key\s*===\s*["']c["']\s*&&\s*xterm\.hasSelection\(\)/);
-  assert.match(app, /key\s*===\s*["']z["'][\s\S]*sendTerminalInput\(["']\\x1f["']\)/);
+  assert.match(app, /event\.shiftKey[\s\S]*key\s*===\s*["']z["'][\s\S]*sendTerminalInput\(["']\\x1f["']\)/);
+  assert.match(app, /Ctrl<\/kbd>\+<kbd>Shift<\/kbd>\+<kbd>Z/);
+  assert.match(app, /Ctrl\+Z 始终保留给远端终端挂起进程/);
 });
 
 test('SSH terminal guards multiline paste and supports context actions', () => {
@@ -19,6 +21,8 @@ test('SSH terminal guards multiline paste and supports context actions', () => {
   assert.match(app, /addEventListener\(\s*["']contextmenu["']/);
   assert.match(app, /data-terminal-copy/);
   assert.match(app, /data-terminal-paste/);
+  assert.match(app, /now\s*-\s*lastTerminalPaste\.time\s*<\s*500/);
+  assert.match(app, /terminalDialog\.append\(terminalContextMenu\)/);
 });
 
 test('Alt arrows move by one visual terminal row outside alternate screen', () => {

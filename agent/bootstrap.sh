@@ -111,7 +111,7 @@ install_runtime_dependencies() {
   apt-get update
   apt-get install -y --no-install-recommends \
     ca-certificates curl jq pciutils git python3 python3-pip openssh-server iproute2 tini \
-    fio iperf3 nvme-cli cmake build-essential rclone libboost-program-options-dev
+    fio iperf3 nvme-cli cmake build-essential rclone rsync libboost-program-options-dev
   if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y --no-install-recommends nodejs
