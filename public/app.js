@@ -2410,201 +2410,6 @@ async function instanceAction(id, action, button) {
 }
 const fmt = (n, d = 1) =>
   Number.isFinite(Number(n)) ? Number(n).toFixed(d) : "失败";
-function flattenReport(value, path = "", out = []) {
-  if (out.length >= 80) return out;
-  if (value && typeof value === "object") {
-    for (const [k, v] of Object.entries(value))
-      flattenReport(v, path ? `${path}.${k}` : k, out);
-  } else out.push([path, String(value)]);
-  return out;
-}
-let selectedBenchmarkId = "",
-  currentBenchmarkReport = null;
-function renderBenchmarkReport(r, i) {
-  currentBenchmarkReport = r;
-  $("#reportMeta").textContent =
-    `${i.name} · ${new Date(r.generatedAt).toLocaleString()}`;
-  const gpuRows = (r.gpus || []).map((g) => [
-    `GPU ${g.index} · ${g.name}`,
-    `${g.busId} · PCIe Gen ${g.pcie.genCurrent}/${g.pcie.genMax} · x${g.pcie.widthCurrent}/x${g.pcie.widthMax}`,
-    "pass",
-  ]);
-  const computeRows = (r.compute?.gpus || []).flatMap((gpu) =>
-    (gpu.results || []).map((result) => [
-      `GPU ${gpu.index} · ${String(result.precision).toUpperCase()} GEMM`,
-      result.ok
-        ? `${fmt(result.tflops, 2)} TFLOPS · ${fmt(result.medianMs, 2)} ms`
-        : result.error || "不支持",
-      result.ok ? "pass" : "fail",
-    ]),
-  );
-  const summary = [
-    [
-      "Internet ↓ / ↑",
-      `${fmt(r.internet?.downloadMbps)} / ${fmt(r.internet?.uploadMbps)} Mbps`,
-      r.internet?.downloadMbps != null && r.internet?.uploadMbps != null
-        ? "pass"
-        : "fail",
-    ],
-    [
-      `Disk fio (${r.disk?.target || "unknown"})`,
-      `${fmt(r.disk?.readMBps)} / ${fmt(r.disk?.writeMBps)} MB/s · ${fmt(r.disk?.readIops, 0)} / ${fmt(r.disk?.writeIops, 0)} IOPS`,
-      r.disk?.ok ? "pass" : "fail",
-    ],
-    [
-      "NVLink status",
-      r.nvlink?.ok ? "已采集" : "失败: " + (r.nvlink?.error || "不可用"),
-      r.nvlink?.ok ? "pass" : "fail",
-    ],
-    [
-      "nvbandwidth",
-      r.nvbandwidth?.available === false
-        ? "失败: " + r.nvbandwidth.error
-        : `${flattenReport(r.nvbandwidth).length} 项逐卡数据`,
-      r.nvbandwidth?.available === false ? "fail" : "pass",
-    ],
-  ];
-  const detail = flattenReport(r.nvbandwidth).map(([k, v]) => [
-    `带宽 · ${k}`,
-    v,
-    "pass",
-  ]);
-  $("#benchmarkRows").innerHTML = [
-    ...gpuRows,
-    ...computeRows,
-    ...summary,
-    ...detail,
-  ]
-    .map(
-      ([label, value, state]) =>
-        `<div class="bench-row"><span>${esc(label)}</span><strong>${esc(value)}</strong><b class="${state}">${state === "pass" ? "LIVE" : "FAIL"}</b></div>`,
-    )
-    .join("");
-  $("#reachability").innerHTML = Object.entries(r.reachability || {})
-    .map(
-      ([name, x]) =>
-        `<div class="reach-row"><span>${esc(name)}<small>${esc(x.remoteIp || "")}</small></span><strong>HTTP ${x.status || "-"} · ${fmt(x.totalMs, 0)} ms<small>DNS ${fmt(x.dnsMs, 0)} / TCP ${fmt(x.connectMs, 0)} / TLS ${fmt(x.tlsMs, 0)} ms</small></strong><b class="${x.reachable ? "pass" : "fail"}">${x.reachable ? "直连" : "阻断"}</b></div>`,
-    )
-    .join("");
-  $("#reportNote").textContent = r.note || "测试结果来自所选实例内的真实命令。";
-  $("#benchmarkState").textContent = "测试完成，可以重新测试或导出完整 JSON。";
-  $("#exportReport").disabled = false;
-}
-async function loadReport() {
-  const select = $("#benchmarkInstance");
-  try {
-    const list = await request("/api/instances"),
-      running = list.instances.filter((x) => x.status === "running");
-    instances = list.instances;
-    const previous = selectedBenchmarkId || select.value;
-    select.innerHTML =
-      '<option value="">请选择运行中的实例</option>' +
-      running
-        .map(
-          (i) =>
-            `<option value="${esc(i.id)}">${esc(i.name)} · ${esc(i.provider)} · ${esc(i.gpuCount)}× ${esc(i.gpu)}${i.benchmarkReady ? " · 可测试" : " · 测试通道未就绪"}</option>`,
-        )
-        .join("");
-    if (running.some((i) => String(i.id) === String(previous)))
-      select.value = previous;
-    selectedBenchmarkId = select.value;
-    const selected = running.find(
-      (i) => String(i.id) === String(selectedBenchmarkId),
-    );
-    $("#runBenchmark").disabled = !selected?.benchmarkReady;
-    if (!running.length) {
-      $("#benchmarkState").textContent =
-        "当前没有运行中的实例。请先在“我的实例”启动一台实例。";
-      $("#reportMeta").textContent = "没有可测试的实例";
-    } else if (!selectedBenchmarkId) {
-      $("#benchmarkState").textContent =
-        "请选择实例；测试只会在你选中的实例上运行。";
-      $("#reportMeta").textContent = "尚未选择实例";
-    } else if (!selected?.benchmarkReady) {
-      $("#benchmarkState").textContent =
-        selected?.benchmarkMessage || "该实例的性能测试通道尚未就绪。";
-    }
-  } catch (e) {
-    $("#benchmarkState").textContent = `实例列表加载失败：${e.message}`;
-  }
-}
-$("#benchmarkInstance").onchange = () => {
-  selectedBenchmarkId = $("#benchmarkInstance").value;
-  currentBenchmarkReport = null;
-  const i = instances.find((x) => String(x.id) === String(selectedBenchmarkId));
-  $("#runBenchmark").disabled = !i?.benchmarkReady;
-  $("#exportReport").disabled = true;
-  $("#benchmarkRows").innerHTML = "";
-  $("#reachability").innerHTML = "";
-  $("#reportMeta").textContent = i
-    ? `${i.name} · 尚未运行测试`
-    : "尚未选择实例";
-  $("#benchmarkState").textContent = !i
-    ? "请选择实例"
-    : i.benchmarkReady
-      ? "该实例测试通道已就绪，可以运行真实测试。"
-      : i.benchmarkMessage || "该实例测试通道尚未就绪。";
-};
-async function waitBenchmarkJob(id, jobId) {
-  for (let attempt = 0; attempt < 300; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    const job = await request(
-      `/api/instances/${encodeURIComponent(id)}/benchmark/jobs/${encodeURIComponent(jobId)}`,
-    );
-    $("#benchmarkState").textContent =
-      job.status === "queued"
-        ? "任务已提交，等待实例 Agent 领取…"
-        : "实例正在运行真实测试，请勿关闭页面…";
-    if (job.status === "completed") return job.report;
-    if (job.status === "failed") throw Error(job.error || "测试失败");
-  }
-  throw Error("等待测试结果超时");
-}
-$("#runBenchmark").onclick = async () => {
-  const id = selectedBenchmarkId;
-  if (!id) return;
-  const button = $("#runBenchmark"),
-    mode = $("#benchmarkMode").value;
-  setButtonBusy(button, "测试中…");
-  $("#benchmarkState").textContent = "正在提交测试任务…";
-  try {
-    const response = await request(
-        `/api/instances/${encodeURIComponent(id)}/benchmark`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ mode }),
-        },
-      ),
-      r = response.queued
-        ? await waitBenchmarkJob(id, response.jobId)
-        : response.report || response,
-      i = instances.find((x) => String(x.id) === String(id)) || { name: id };
-    renderBenchmarkReport(r, i);
-    toast("性能测试完成");
-  } catch (error) {
-    $("#benchmarkState").textContent = `测试失败：${error.message}`;
-    toast(`测试失败：${error.message}`);
-  } finally {
-    clearButtonBusy(button);
-    button.disabled = !instances.find(
-      (x) => String(x.id) === String(selectedBenchmarkId),
-    )?.benchmarkReady;
-  }
-};
-$("#exportReport").onclick = () => {
-  if (!currentBenchmarkReport) return;
-  const a = document.createElement("a"),
-    url = URL.createObjectURL(
-      new Blob([JSON.stringify(currentBenchmarkReport, null, 2)], {
-        type: "application/json",
-      }),
-    );
-  a.href = url;
-  a.download = `gpu-benchmark-${selectedBenchmarkId}-${Date.now()}.json`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-};
 function reachabilityMarkup(report) {
   if (!report)
     return '<div class="reachability-empty">尚未从平台测试 SSH 公网入口</div>';
@@ -2970,18 +2775,18 @@ loadInstances = async function () {
         '</small></dd></div></dl><div class="instance-panels"><div class="metrics" id="m-' +
         id +
         '">' +
-        instanceMetricsMarkup(i) +
-        '</div><div class="instance-detail"><div class="detail-head"><div><strong>外网可达性</strong><small>直连 Hugging Face、Cloudflare、AWS、OpenAI、Google</small></div><button data-reachability="' +
-        id +
-        '" ' +
-        (i.status === "running" ? "" : "disabled") +
-        '>手动测试</button></div><div id="r-' +
-        id +
-        '">' +
-        reachabilityMarkup(reachabilityCache.get(String(i.id))) +
-        "</div>" +
-        instanceBenchmarkMarkup(i) +
-        '</div></div><div class="instance-actions"><span class="sub">' +
+       instanceMetricsMarkup(i) +
+       '</div><div class="instance-detail"><div class="instance-detail-inner"><div class="detail-head"><div><strong>外网可达性</strong><small>直连 Hugging Face、Cloudflare、AWS、OpenAI、Google</small></div><button data-reachability="' +
+       id +
+       '" ' +
+       (i.status === "running" ? "" : "disabled") +
+       '>手动测试</button></div><div id="r-' +
+       id +
+       '">' +
+       reachabilityMarkup(reachabilityCache.get(String(i.id))) +
+       "</div>" +
+       instanceBenchmarkMarkup(i) +
+       '</div></div></div><div class="instance-actions"><span class="sub">' +
         esc(
           i.accessType === "tailscale"
             ? "无公网 IP · 请到 Tailscale 管理后台获取 100.x.x.x"
@@ -3144,7 +2949,7 @@ sshDialog.showModal = function () {
     : showSshDialogModal();
 };
 sshDialog.querySelector("form").innerHTML =
-  '<button class="close" value="cancel">×</button><span class="eyebrow">SSH & FILES</span><h2>SSH 与文件传输</h2><div class="ssh-transfer-columns"><section class="ssh-column"><h3>SSH</h3><p class="ssh-security-note">查看连接信息、复制命令或直接进入平台终端。</p><div id="sshConnectionDetails"></div></section><section class="files-column"><div class="transfer-heading"><div><h3>传输文件</h3><small>选择一种传输方式</small></div><div class="transfer-tabs" role="tablist"><button type="button" class="active" data-transfer-tab="scp">SCP</button><button type="button" data-transfer-tab="rsync">rsync</button></div></div><div class="transfer-panel active" data-transfer-panel="scp"><p class="transfer-help">可反复添加多个文件或文件夹；展开文件夹可配置上传内容，默认全选。</p><div id="scpDropZone" class="drop-zone"><input id="scpFile" type="file" multiple><input id="scpFolder" type="file" webkitdirectory multiple><strong>拖拽文件或文件夹到这里</strong><small id="scpFileLabel">尚未选择内容</small><div class="picker-actions"><button type="button" id="pickScpFiles">选择文件</button><button type="button" id="pickScpFolder">选择文件夹</button></div></div><div id="scpSelectionTree" class="selection-tree" hidden></div><div class="transfer-row transfer-destination"><label class="remote-path-field"><span>云主机目标路径</span><input id="scpRemoteDir" value="/data/uploads" aria-label="云主机目标路径"></label><progress id="scpProgress" value="0" max="100" hidden aria-label="SCP 上传进度"></progress><button type="button" id="uploadScpFile">上传所选</button></div></div><div class="transfer-panel" data-transfer-panel="rsync"><p class="transfer-help">适合断点续传和增量同步。</p><div class="transfer-row sync-options"><select id="syncTool"><option value="rsync">rsync（推荐）</option><option value="rclone">rclone sync</option></select><label class="remote-path-field"><span>云主机目标路径</span><input id="syncRemoteDir" value="/data/sync" aria-label="云主机目标路径"></label><button type="button" id="copySyncCommand">复制命令</button></div><code id="syncCommand" class="sync-command"></code></div></section></div><menu><button value="cancel">关闭</button><button type="button" id="downloadSshKey">下载私钥</button><button type="button" id="copySshCommand">复制 SSH 命令</button><button type="button" id="openSshTerminal" class="terminal-primary">打开平台终端</button></menu>';
+  '<button class="close" value="cancel">×</button><span class="eyebrow">SSH & FILES</span><h2>SSH 与文件传输</h2><div class="ssh-transfer-columns"><section class="ssh-column"><h3>SSH</h3><p class="ssh-security-note">查看连接信息、复制命令或直接进入平台终端。</p><div id="sshConnectionDetails"></div><div id="sshKeyDownload" class="ssh-key-download" hidden><strong>实例专属私钥</strong><small>通过临时密钥加密下载，仅对当前实例有效。</small><button type="button" id="downloadSshKey">⇩ 下载私钥</button></div></section><section class="files-column"><div class="transfer-heading"><div><h3>传输文件</h3><small>选择一种传输方式</small></div><div class="transfer-tabs" role="tablist"><button type="button" class="active" data-transfer-tab="scp">SCP</button><button type="button" data-transfer-tab="rsync">rsync</button></div></div><div class="transfer-panel active" data-transfer-panel="scp"><p class="transfer-help">可反复添加多个文件或文件夹；展开文件夹可配置上传内容，默认全选。</p><div id="scpDropZone" class="drop-zone"><input id="scpFile" type="file" multiple><input id="scpFolder" type="file" webkitdirectory multiple><strong>拖拽文件或文件夹到这里</strong><small id="scpFileLabel">尚未选择内容</small><div class="picker-actions"><button type="button" id="pickScpFiles">选择文件</button><button type="button" id="pickScpFolder">选择文件夹</button></div></div><div id="scpSelectionTree" class="selection-tree" hidden></div><div class="transfer-row transfer-destination"><label class="remote-path-field"><span>云主机目标路径</span><input id="scpRemoteDir" value="/data/uploads" aria-label="云主机目标路径"></label><progress id="scpProgress" value="0" max="100" hidden aria-label="SCP 上传进度"></progress><button type="button" id="uploadScpFile">上传所选</button></div></div><div class="transfer-panel" data-transfer-panel="rsync"><p class="transfer-help">适合断点续传和增量同步。</p><div class="transfer-row sync-options"><select id="syncTool"><option value="rsync">rsync（推荐）</option><option value="rclone">rclone sync</option></select><label class="remote-path-field"><span>云主机目标路径</span><input id="syncRemoteDir" value="/data/sync" aria-label="云主机目标路径"></label><button type="button" id="copySyncCommand">复制命令</button></div><code id="syncCommand" class="sync-command"></code></div></section></div><menu><button value="cancel">关闭</button><button type="button" id="copySshCommand">复制 SSH 命令</button><button type="button" id="openSshTerminal" class="terminal-primary">打开平台终端</button></menu>';
 sshDialog
   .querySelector("form")
   .insertAdjacentHTML(
@@ -3642,13 +3447,19 @@ function decorateSshButtons() {
     }
     actions.querySelector("[data-ssh-key]")?.remove();
     const accessible = Boolean(instance.sshReady),
+      powered = ["provisioning", "running"].includes(instance.providerState),
       title = accessible
         ? "SSH 公网入口已就绪，可以登录或传输文件"
-        : "正在等待 SSH 安装完成并通过公网连接检查";
+        : powered
+          ? "正在等待 SSH 安装完成并通过公网连接检查"
+          : "实例未开机，开机后即可连接 SSH";
     if (button.textContent !== "SSH / 文件") button.textContent = "SSH / 文件";
     button.disabled = false;
-    button.classList.toggle("ssh-loading", !accessible);
-    button.setAttribute("aria-busy", String(!accessible));
+    // 只有实例已经开机、SSH 还在就绪时才显示呼吸等待动画；
+    // 关机状态下保持静止，避免在无法连接时持续闪光。
+    button.classList.toggle("ssh-loading", !accessible && powered);
+    button.classList.toggle("ssh-dormant", !accessible && !powered);
+    button.setAttribute("aria-busy", String(!accessible && powered));
     button.title = title;
   });
   bindInstanceBenchmarkButtons();
@@ -3696,42 +3507,42 @@ document.addEventListener("click", async function (event) {
       instance,
       keyDownloadUrl,
       identityFile,
-      terminalAvailable: false,
-    };
-    $("#sshConnectionDetails").innerHTML =
-      '<div class="ssh-pending-state"><strong>SSH 正在准备中</strong><small>实例入口就绪后即可打开平台终端，请稍候。</small></div>';
-    $("#downloadSshKey").hidden = !keyDownloadUrl;
-    $("#copySshCommand").disabled = true;
-    $("#openSshTerminal").hidden = false;
-    $("#openSshTerminal").disabled = true;
-    $("#uploadScpFile").disabled = true;
-    sshDialog.showModal();
-    return;
-  }
-  setButtonBusy(button, "等待 SSH…");
-  try {
-    const ssh = await waitForSshConnection(instance);
-    currentSshCommand = ssh.command;
-    currentSshConnection = { ...ssh, instance };
-    const credential = ssh.managed
-      ? '<div class="ssh-field"><span>认证</span><code>托管私钥（已加密保存）</code></div>'
-      : '<div class="ssh-field"><span>密码</span><code>' +
-        esc(ssh.password) +
-        "</code></div>";
-    $("#sshConnectionDetails").innerHTML =
-      '<div class="ssh-field"><span>地址</span><strong>' +
-      esc(ssh.host) +
-      ":" +
-      esc(ssh.port) +
-      '</strong></div><div class="ssh-field"><span>账号</span><strong>' +
-      esc(ssh.username) +
-      "</strong></div>" +
-      credential +
-      '<div class="ssh-command"><code>' +
-      esc(ssh.command) +
-      "</code></div>";
-    $("#downloadSshKey").hidden = !ssh.keyDownloadUrl;
-    $("#copySshCommand").disabled = false;
+     terminalAvailable: false,
+   };
+   $("#sshConnectionDetails").innerHTML =
+     '<div class="ssh-pending-state"><strong>SSH 正在准备中</strong><small>实例入口就绪后即可打开平台终端，请稍候。</small></div>';
+   $("#sshKeyDownload").hidden = !keyDownloadUrl;
+   $("#copySshCommand").disabled = true;
+   $("#openSshTerminal").hidden = false;
+   $("#openSshTerminal").disabled = true;
+   $("#uploadScpFile").disabled = true;
+   sshDialog.showModal();
+   return;
+ }
+ setButtonBusy(button, "等待 SSH…");
+ try {
+   const ssh = await waitForSshConnection(instance);
+   currentSshCommand = ssh.command;
+   currentSshConnection = { ...ssh, instance };
+   const credential = ssh.managed
+     ? '<div class="ssh-field"><span>认证</span><code>托管私钥（已加密保存）</code></div>'
+     : '<div class="ssh-field"><span>密码</span><code>' +
+       esc(ssh.password) +
+       "</code></div>";
+   $("#sshConnectionDetails").innerHTML =
+     '<div class="ssh-field"><span>地址</span><strong>' +
+     esc(ssh.host) +
+     ":" +
+     esc(ssh.port) +
+     '</strong></div><div class="ssh-field"><span>账号</span><strong>' +
+     esc(ssh.username) +
+     "</strong></div>" +
+     credential +
+     '<div class="ssh-command"><code>' +
+     esc(ssh.command) +
+     "</code></div>";
+   $("#sshKeyDownload").hidden = !ssh.keyDownloadUrl;
+   $("#copySshCommand").disabled = false;
     $("#openSshTerminal").hidden = false;
     $("#openSshTerminal").disabled =
       !ssh.terminalAvailable ||
@@ -4181,6 +3992,9 @@ const storageProviderFields = {
     hint: "#ossHint",
   },
 };
+const storageProviderConfigured = Object.fromEntries(
+  Object.keys(storageProviderFields).map((provider) => [provider, false]),
+);
 for (const field of [
   {
     ids: ["#r2Bucket", "#ossBucket"],
@@ -4190,18 +4004,17 @@ for (const field of [
   },
   {
     ids: ["#r2AccessKey", "#ossAccessKey"],
-    label: "S3 Access Key ID（对象存储凭据）",
+    label: "S3 Access Key ID",
     placeholder: "请输入 S3 Access Key ID",
-    description: "S3 Access Key ID（对象存储凭据，不是云账号或登录邮箱）",
+    description: "在供应商控制台创建的 S3 Access Key ID（不是云账号或登录邮箱）",
   },
   {
     ids: ["#r2SecretKey", "#ossSecretKey"],
-    label: "S3 Secret Access Key（对象存储凭据）",
+    label: "S3 Secret Access Key",
     placeholder: "请输入 S3 Secret Access Key",
-    description:
-      "S3 Secret Access Key（对象存储凭据，不是云账号登录密码）",
+    description: "在供应商控制台创建的 S3 Secret Access Key（不是云账号登录密码）",
   },
-])
+]
   for (const id of field.ids) {
     const input = $(id),
     labelText = [...input.closest("label").childNodes].find(
@@ -4216,13 +4029,13 @@ for (const provider of [
     id: "r2",
     url: "https://dash.cloudflare.com/?to=/:account/r2",
     windowName: "gpu-fleet-cloudflare-r2",
-    label: "打开 R2 控制台",
+    label: "前往 Cloudflare R2 获取 Access Key",
   },
   {
     id: "oss",
     url: "https://oss.console.aliyun.com/overview",
     windowName: "gpu-fleet-aliyun-oss",
-    label: "打开 OSS 控制台",
+    label: "前往阿里云 OSS 获取 AccessKey",
   },
 ]) {
   const legend = document.querySelector(
@@ -4234,7 +4047,7 @@ for (const provider of [
   actions.className = "storage-provider-actions";
   button.type = "button";
   button.className = "storage-console-link";
-  button.textContent = "打开控制台 ↗";
+  button.textContent = "前往获取凭证 ↗";
   button.setAttribute("aria-label", provider.label);
   button.onclick = () => openProviderWindow(provider.url, provider.windowName);
   actions.append(button, toggle);
@@ -4352,20 +4165,29 @@ $("#disconnectExistingStorage").onclick = async function () {
   }
 };
 function updateStoragePrimaryOptions() {
-  for (const [provider, fields] of Object.entries(storageProviderFields))
-    $(`#storagePrimary option[value="${provider}"]`).disabled = !$(
-      fields.enabled,
-    ).checked;
-  const selected = $("#storagePrimary").value;
-  if (
-    storageProviderFields[selected] &&
-    !$(storageProviderFields[selected].enabled).checked
-  ) {
-    const fallback = Object.entries(storageProviderFields).find(
-      ([, fields]) => $(fields.enabled).checked,
-    )?.[0];
-    if (fallback) $("#storagePrimary").value = fallback;
+  const select = $("#storagePrimary");
+  const valid = [];
+  for (const [provider, fields] of Object.entries(storageProviderFields)) {
+    // 只有「已配置并且启用」的供应商才能作为新实例默认读取源。
+    const selectable =
+      storageProviderConfigured[provider] && $(fields.enabled).checked;
+    $(`#storagePrimary option[value="${provider}"]`).disabled = !selectable;
+    if (selectable) valid.push(provider);
   }
+  // 清理上次无可用源时插入的占位项。
+  select.querySelector('option[data-empty]')?.remove();
+  if (!valid.length) {
+    // 没有可读取的存储源：锁定选择器，避免选到读不到数据的供应商。
+    const placeholder = new Option("暂无已配置并启用的存储源", "");
+    placeholder.disabled = true;
+    placeholder.dataset.empty = "";
+    select.prepend(placeholder);
+    select.selectedIndex = 0;
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  if (!valid.includes(select.value)) select.value = valid[0];
 }
 async function loadS3Config() {
   try {
@@ -4395,9 +4217,10 @@ async function loadS3Config() {
       $(fields.accessKey).placeholder = item.accessKeySuffix
         ? `已保存 ····${item.accessKeySuffix}，留空则保留`
         : "Access Key ID";
-      $(fields.hint).textContent = item.configured
-        ? `已保存 Bucket：${item.bucket}`
-        : "尚未配置";
+     $(fields.hint).textContent = item.configured
+       ? `已保存 Bucket：${item.bucket}`
+       : "尚未配置";
+      storageProviderConfigured[provider] = Boolean(item.configured);
     }
     $("#storagePrimary").value = c.primaryProvider || "r2";
     updateStoragePrimaryOptions();

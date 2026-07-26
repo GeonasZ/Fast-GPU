@@ -17,6 +17,11 @@
 .electron-client #sshDialog.ssh-window-minimized .ssh-window-bar { margin-bottom: 0; }
 .ssh-transfer-columns { display: grid; grid-template-columns: minmax(280px, .8fr) minmax(420px, 1.35fr); gap: 22px; margin-top: 18px; }
 .ssh-column, .files-column { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 11px; }
+.ssh-key-download { display: grid; gap: 6px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; background: #f6f8f7; }
+.ssh-key-download strong { font-size: 13px; }
+.ssh-key-download small { display: block; color: var(--muted); font-size: 11px; }
+.ssh-key-download button { justify-self: start; margin-top: 4px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; }
+.ssh-key-download button:hover:not(:disabled) { border-color: #9eb9aa; background: #fbfdfc; }
 .transfer-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .transfer-heading small, .transfer-help { color: var(--muted); font-size: 11px; }
 .transfer-tabs { display: flex; padding: 3px; border-radius: 8px; background: #e9eeeb; }
@@ -136,7 +141,7 @@
 .storage-settings p, .s3-actions small { color: var(--muted); }
 .storage-provider-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .s3-form { min-width: 0; margin: 0; padding: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; border: 0; }
-.s3-form legend { width: 100%; padding: 0 0 16px; display: flex; align-items: center; justify-content: space-between; }
+.s3-form legend { width: 100%; padding: 16px 0 16px; display: flex; align-items: flex-start; justify-content: space-between; }
 .s3-form legend span { display: grid; gap: 8px; }
 .s3-form legend .storage-provider-actions { display: flex; grid-auto-flow: initial; align-items: center; gap: 10px; }
 .storage-console-link { padding: 6px 9px; color: #176b42; background: #eef7f2; border: 1px solid #b9d7c7; border-radius: 7px; font-size: 11px; font-weight: 700; white-space: nowrap; }
@@ -171,9 +176,9 @@
 .s3-actions label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
 .s3-actions small { flex: 1; }
 #sshDialog menu .terminal-primary { order: 20; margin-left: auto; border-color: #050907; color: #fff; background: #050907; font-weight: 700; }
-.instance-actions [data-ssh],
-.instance-actions [data-ssh-key] { min-height: 32px; padding: 6px 10px; font-size: 13px; line-height: 1.2; }
+.instance-actions [data-ssh] { min-height: 32px; padding: 6px 10px; font-size: 13px; line-height: 1.2; }
 .instance-actions [data-ssh].ssh-loading { animation: ssh-card-loading 1.15s ease-in-out infinite; cursor: progress; }
+.instance-actions [data-ssh].ssh-dormant { border-color: var(--line); color: var(--muted); cursor: default; }
 .ssh-pending-state { display: grid; gap: 5px; margin-top: 14px; padding: 14px; border: 1px solid #ead9ac; border-radius: 8px; background: #fffbf0; color: #70571c; }
 .ssh-pending-state small { color: inherit; }
 @keyframes ssh-card-loading {

@@ -197,7 +197,9 @@ test('managed SSH remains available when agent telemetry is unavailable', () => 
   assert.match(app, /SSH \/ 文件/);
   assert.match(app, /accessible\s*=\s*Boolean\(instance\.sshReady\)/);
   assert.match(app, /button\.disabled\s*=\s*false/);
-  assert.match(app, /button\.classList\.toggle\(["']ssh-loading["'],\s*!accessible\)/);
+  assert.match(app, /powered\s*=\s*\[[\s\S]*?["']provisioning["'][\s\S]*?["']running["'][\s\S]*?\]\.includes\(instance\.providerState\)/);
+  assert.match(app, /button\.classList\.toggle\(["']ssh-loading["'],\s*!accessible\s*&&\s*powered\)/);
+  assert.match(app, /button\.classList\.toggle\(["']ssh-dormant["'],\s*!accessible\s*&&\s*!powered\)/);
   assert.match(app, /\$\(["']#openSshTerminal["']\)\.disabled\s*=\s*true/);
   assert.doesNotMatch(app, /keyButton\.textContent\s*=\s*["']下载 SSH Key["']/);
   assert.match(server, /scheduleSshReadinessProbe/);
