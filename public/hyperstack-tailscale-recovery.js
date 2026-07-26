@@ -126,58 +126,6 @@
     }
   };
 
-  const decode = value => {
-    const binary = atob(value), bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index++)
-      bytes[index] = binary.charCodeAt(index);
-    return bytes;
-  };
-  const encode = value => {
-    let binary = '';
-    for (const byte of new Uint8Array(value)) binary += String.fromCharCode(byte);
-    return btoa(binary);
-  };
-
-  async function downloadKey(instance) {
-    const pair = await crypto.subtle.generateKey({
-      name: 'RSA-OAEP',
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: 'SHA-256',
-    }, true, ['encrypt', 'decrypt']);
-    const publicKey = encode(await crypto.subtle.exportKey('spki', pair.publicKey));
-    const envelope = await request(
-      `/api/instances/${encodeURIComponent(instance.id)}/ssh/key?provider=${encodeURIComponent(instance.provider)}`,
-      {
-        method: 'POST',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify({publicKey}),
-      },
-    );
-    const rawKey = await crypto.subtle.decrypt(
-      {name: 'RSA-OAEP'}, pair.privateKey, decode(envelope.wrappedKey),
-    );
-    const aesKey = await crypto.subtle.importKey(
-      'raw', rawKey, {name: 'AES-GCM'}, false, ['decrypt'],
-    );
-    const ciphertext = decode(envelope.ciphertext), tag = decode(envelope.tag);
-    const combined = new Uint8Array(ciphertext.length + tag.length);
-    combined.set(ciphertext);
-    combined.set(tag, ciphertext.length);
-    const plaintext = await crypto.subtle.decrypt({
-      name: 'AES-GCM', iv: decode(envelope.iv), tagLength: 128,
-    }, aesKey, combined);
-    const url = URL.createObjectURL(new Blob([plaintext], {
-      type: envelope.contentType || 'application/x-pem-file',
-    }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = envelope.filename ||
-      `gpu-fleet-${instance.provider}-${instance.id}.pem`;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
   function decorateInstances() {
     for (const instance of recoveredInstances) {
       const action = document.querySelector(
@@ -194,17 +142,6 @@
             `ssh -i <private-key> ${instance.sshUser || '<image-user>'}@<tailscale-ip>`);
         if (address.textContent !== text) address.textContent = text;
       }
-      if (
-        !instance.platformManaged ||
-        actions.querySelector('[data-managed-key], [data-ssh-key]')
-      )
-        continue;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.dataset.managedKey = String(instance.id);
-      button.textContent = '下载 SSH Key';
-      button.title = '下载平台为该实例自动生成的 SSH 私钥';
-      actions.prepend(button, document.createTextNode(' '));
     }
   }
 
@@ -224,22 +161,4 @@
     refreshTimer = setTimeout(refreshInstances, 50);
   }).observe(grid, {childList: true, subtree: true});
   refreshInstances();
-
-  document.addEventListener('click', async event => {
-    const button = event.target.closest('[data-managed-key]');
-    if (!button) return;
-    const instance = recoveredInstances.find(
-      item => String(item.id) === String(button.dataset.managedKey),
-    );
-    if (!instance) return;
-    button.disabled = true;
-    try {
-      await downloadKey(instance);
-      notify('SSH 私钥已通过临时加密下载');
-    } catch (error) {
-      notify(`私钥下载失败：${error.message}`);
-    } finally {
-      button.disabled = false;
-    }
-  });
 })();

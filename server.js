@@ -3767,6 +3767,57 @@ async function api(req, res, url) {
         mode: 0o600,
       });
       securePrivateKeyFile(keyFile);
+      if (req.headers["x-extract-archive"] === "1") {
+        // Bundled upload: a single .tar.gz produced by the browser.
+        const archiveName = `${token}.tar.gz`,
+          remoteArchive = `/tmp/gpu-fleet-upload-${archiveName}`;
+        try {
+          await runCommand(
+            "ssh",
+            [...common, `${managed.username}@${managed.host}`, `mkdir -p -- ${quote(remoteDir)}`],
+            { timeout: 30000, killSignal: "SIGKILL" },
+          );
+          await runCommand(
+            "scp",
+            [
+              "-i",
+              keyFile,
+              "-P",
+              String(managed.port),
+              "-o",
+              "BatchMode=yes",
+              "-o",
+              "StrictHostKeyChecking=accept-new",
+              "-o",
+              "ConnectTimeout=8",
+              "-o",
+              "ConnectionAttempts=1",
+              localFile,
+              `${managed.username}@${managed.host}:${quote(remoteArchive)}`,
+            ],
+            { timeout: 30 * 60 * 1000, killSignal: "SIGKILL" },
+          );
+          await runCommand(
+            "ssh",
+            [...common, `${managed.username}@${managed.host}`, `tar -xzf ${quote(remoteArchive)} -C ${quote(remoteDir)} && rm -f ${quote(remoteArchive)}`],
+            { timeout: 10 * 60 * 1000, killSignal: "SIGKILL" },
+          );
+        } catch (cause) {
+          throw Object.assign(Error(`压缩包解压失败：${cause.message}`), {
+            status: 502,
+            code: "ssh_transfer_failed",
+            cause,
+          });
+        }
+        return json(res, 201, {
+          ok: true,
+          name: archiveName,
+          size,
+          relativePath: ".",
+          remotePath: remoteDir,
+          extracted: true,
+        });
+      }
       try {
         await runCommand(
           "ssh",
@@ -3904,6 +3955,84 @@ async function api(req, res, url) {
           ),
           { status: 502, code: "remote_rsync_unavailable", cause },
         );
+      }
+      if (d.compress) {
+        const tarCommand = resolveTool("tar").executable;
+        if (!tarCommand)
+          throw Object.assign(Error("本机未找到 tar，无法启用压缩传输"), {
+            status: 409,
+            code: "tar_unavailable",
+          });
+        const localArchive = path.join(os.tmpdir(), `gpu-fleet-sync-${token}.tar.gz`),
+          remoteArchive = `/tmp/gpu-fleet-sync-${token}.tar.gz`,
+          baseName = path.basename(localPath) || "data",
+          parentName = path.dirname(localPath) || ".",
+          sshBase = [
+            "-i",
+            keyFile,
+            "-p",
+            String(managed.port),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "ConnectTimeout=8",
+            "-o",
+            "ConnectionAttempts=1",
+          ],
+          sshHost = `${managed.username}@${managed.host}`;
+        try {
+          if (direction === "upload") {
+            await runCommand(tarCommand, ["-czf", localArchive, "-C", parentName, baseName], {
+              timeout: 60 * 60 * 1000,
+              killSignal: "SIGKILL",
+            });
+            await runCommand(rsyncCommand, ["-z", "--partial", "--info=progress2", "-e", ssh, localArchive, `${sshHost}:${quote(remoteArchive)}`], {
+              timeout: 60 * 60 * 1000,
+              killSignal: "SIGKILL",
+            });
+            await runCommand("ssh", [...sshBase, sshHost, `mkdir -p -- ${quote(remoteDir)} && tar -xzf ${quote(remoteArchive)} -C ${quote(remoteDir)} && rm -f ${quote(remoteArchive)}`], {
+              timeout: 60 * 60 * 1000,
+              killSignal: "SIGKILL",
+            });
+          } else {
+            await runCommand("ssh", [...sshBase, sshHost, `cd ${quote(remoteDir)} && tar -czf ${quote(remoteArchive)} .`], {
+              timeout: 60 * 60 * 1000,
+              killSignal: "SIGKILL",
+            });
+            await runCommand(rsyncCommand, ["-z", "--partial", "--info=progress2", "-e", ssh, `${sshHost}:${quote(remoteArchive)}`, localArchive], {
+              timeout: 60 * 60 * 1000,
+              killSignal: "SIGKILL",
+            });
+            await runCommand("ssh", [...sshBase, sshHost, `rm -f ${quote(remoteArchive)}`], {
+              timeout: 30000,
+              killSignal: "SIGKILL",
+            });
+            await runCommand(tarCommand, ["-xzf", localArchive, "-C", localPath], {
+              timeout: 60 * 60 * 1000,
+              killSignal: "SIGKILL",
+            });
+          }
+          return json(res, 200, {
+            ok: true,
+            localPath,
+            remoteDir,
+            direction,
+            compressed: true,
+            output: "压缩传输完成",
+          });
+        } finally {
+          // Always remove both temp archives, even on failure.
+          try {
+            await runCommand(
+              "ssh",
+              [...sshBase, sshHost, `rm -f ${quote(remoteArchive)}`],
+              { timeout: 30000, killSignal: "SIGKILL" },
+            );
+          } catch {}
+          removeTemporaryFile(localArchive);
+        }
       }
       const output = await runCommand(rsyncCommand, [
         "-avz",

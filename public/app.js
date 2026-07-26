@@ -291,7 +291,6 @@ const pages = {
   market: ["算力市场", "跨供应商比较并即时启动 GPU"],
   instances: ["我的实例", "SSH 文件上传与增量同步"],
   funds: ["供应商账户中心", "管理供应商充值与 API Key"],
-  bench: ["性能报告", "硬件、网络与外网可达性基准测试"],
   storage: ["S3 存储设置", "配置独立的 S3-compatible 对象存储"],
   settings: ["平台设置", "控制面地址与部署模式"],
 };
@@ -1048,7 +1047,6 @@ function go(view) {
   $("#instanceAccessInfo").hidden = view !== "instances";
   saveUiState({ view });
   updateProviderConnectionSummary(view);
-  if (view === "bench") loadReport();
   if (view === "funds")
     loadProviderConfig().then(() => showBillingProvider(activeBillingProvider));
   if (view === "storage") loadS3Config();
@@ -3121,6 +3119,57 @@ $("#uploadScpFile").addEventListener(
           : "请先选择或拖入文件或文件夹",
       );
       return;
+    }    if ($("#scpCompress")?.checked) {
+      let summary = $("#scpUploadSummary");
+      if (!summary) {
+        progress.parentElement.insertAdjacentHTML(
+          "afterend",
+          '<div id="scpUploadSummary" class="ssh-upload-summary"></div>',
+        );
+        summary = $("#scpUploadSummary");
+      }
+      scpUploadInProgress = true;
+      scpUploadController = new AbortController();
+      const uploadController = scpUploadController;
+      sshLayerNotice("");
+      progress.hidden = false;
+      progress.removeAttribute("value");
+      setButtonBusy(button, "取消上传");
+      button.disabled = false;
+      button.classList.add("cancel-upload");
+      summary.className = "ssh-upload-summary";
+      summary.textContent = "正在压缩并上传 " + items.length + " 个文件…";
+      try {
+        await uploadScpCompressed(items, dir, uploadController.signal);
+        summary.className = "ssh-upload-summary success";
+        summary.textContent = "上传完成：已打包上传 " + items.length + " 个文件到 " + dir;
+        sshLayerNotice("已压缩上传 " + items.length + " 个文件到 " + dir, "success");
+        selectedScpFiles.forEach((item) => {
+          if (items.includes(item)) {
+            item.selected = false;
+            item.uploaded = true;
+          }
+        });
+        showScpSelection();
+      } catch (error) {
+        if (error.name === "AbortError" || uploadController.signal.aborted) {
+          summary.className = "ssh-upload-summary";
+          summary.textContent = "上传已取消。";
+          sshLayerNotice("上传已取消。");
+        } else {
+          summary.className = "ssh-upload-summary failure";
+          summary.textContent = scpFailureMessage(error);
+          sshLayerNotice(scpFailureMessage(error));
+        }
+      } finally {
+        progress.hidden = true;
+        progress.value = 0;
+        scpUploadInProgress = false;
+        scpUploadController = null;
+        button.classList.remove("cancel-upload");
+        clearButtonBusy(button);
+      }
+      return;
     }
     let summary = $("#scpUploadSummary");
     if (!summary) {
@@ -3271,11 +3320,37 @@ document.addEventListener("click", (event) => {
   if (!event.target.closest(".unified-picker"))
     $("#scpPickerMenu").hidden = true;
 });
+$("#scpRemoteDir").closest(".remote-path-field").insertAdjacentHTML(
+  "afterend",
+  '<label class="compress-toggle"><input type="checkbox" id="scpCompress"><span>上传前压缩（打包为 .tar.gz，单次传输）</span></label>',
+);
+// SCP compress remembers the last choice (stored in UI state).
+(function () {
+  const stored = restoreUiState();
+  if (typeof stored.scpCompress === "boolean")
+    $("#scpCompress").checked = stored.scpCompress;
+  $("#scpCompress").addEventListener("change", () =>
+    saveUiState({ scpCompress: $("#scpCompress").checked }),
+  );
+})();
 const localSyncRow = document.createElement("div");
 localSyncRow.className = "local-sync";
 localSyncRow.innerHTML =
   '<div id="localClientNotice" class="local-client-notice">正在检测本地客户端…</div><div id="rsyncInstallChoices" class="rsync-install-choices" hidden><button type="button" id="downloadSystemRsync">安装到电脑<small>调用系统包管理器，不打开网页；删除软件后仍保留</small></button><button type="button" id="downloadManagedRsync">安装到软件内<small>仅供 Fast GPU 使用，删除软件时会一起删除</small></button></div><div class="sync-direction" role="group" aria-label="同步方向"><button type="button" class="active" data-sync-direction="upload">本地 → 云端</button><button type="button" data-sync-direction="download">云端 → 本地</button></div><div id="localSyncControls" class="sync-paths"><label><span>本地路径</span><div class="sync-path-input"><input id="localSyncPath" placeholder="请选择本地文件夹" aria-label="本地路径" readonly><button type="button" id="browseLocalSyncPath" class="sync-browse-button" aria-label="浏览本地文件夹">浏览</button></div></label><div class="sync-path-arrow" aria-hidden="true">→</div><label><span>云端路径</span><input id="localSyncRemotePath" value="/data/sync" aria-label="云端路径"></label><button type="button" id="runLocalSync" class="sync-run-button">同步到云端</button></div><pre id="localSyncOutput" class="local-sync-output" hidden></pre>';
 $("#syncCommand").after(localSyncRow);
+$("#localSyncRemotePath").closest("label").insertAdjacentHTML(
+  "afterend",
+  '<label class="compress-toggle"><input type="checkbox" id="syncCompress"><span>传输前压缩（本地打包 → 传输 → 云端解压，自动清理临时压缩包）</span></label>',
+);
+// rsync/rclone compress remembers the last choice (stored in UI state).
+(function () {
+  const stored = restoreUiState();
+  if (typeof stored.syncCompress === "boolean")
+    $("#syncCompress").checked = stored.syncCompress;
+  $("#syncCompress").addEventListener("change", () =>
+    saveUiState({ syncCompress: $("#syncCompress").checked }),
+  );
+})();
 $("#browseLocalSyncPath").onclick = async function () {
   const localPath = await window.gpuFleetWindow?.pickDirectory?.();
   if (localPath) $("#localSyncPath").value = localPath;
@@ -3637,6 +3712,7 @@ $("#runLocalSync").onclick = async function () {
           localPath,
           remoteDir,
           direction: syncDirection,
+          compress: Boolean($("#syncCompress")?.checked),
         }),
       },
     );
@@ -3889,6 +3965,89 @@ scpDropZone.addEventListener("drop", async (event) => {
       })),
     );
 });
+// Stream a .tar.gz of the selected files to the server, which extracts on the
+// remote. Pure browser, no dependencies. Kept as a standalone snippet so the
+// patch script can inject it verbatim (no quote escaping headaches).
+function buildTarGzStream(items) {
+  const encoder = new TextEncoder();
+  function ustarHeader(name, size) {
+    const block = new Uint8Array(512);
+    const nameBytes = encoder.encode(name);
+    block.set(nameBytes.subarray(0, Math.min(100, nameBytes.length)), 0);
+    const oct = (value, offset, width, term) => {
+      const str = value.toString(8).padStart(width - 1, "0");
+      encoder.encode(str).forEach((b, i) => (block[offset + i] = b));
+      block[offset + width - 1] = term ? 0x20 : 0;
+      if (!term) block[offset + width - 2] = 0x20;
+    };
+    oct(0o644, 100, 8);   // mode
+    oct(0, 108, 8);       // uid
+    oct(0, 116, 8);       // gid
+    oct(size, 124, 12);   // size
+    oct(0, 136, 12);      // mtime
+    block[156] = 0x30;    // typeflag '0' (regular file)
+    encoder.encode("ustar").forEach((b, i) => (block[257 + i] = b));
+    block[263] = 0x20;    // version
+    let checksum = 256;
+    for (let i = 0; i < 512; i++) checksum += block[i];
+    oct(checksum, 148, 8, true);
+    return block;
+  }
+  const zero = () => new Uint8Array(512);
+  return new ReadableStream({
+    async start(controller) {
+      try {
+        for (const item of items) {
+          const name = item.relativePath;
+          const file = item.file;
+          controller.enqueue(ustarHeader(name, file.size));
+          const reader = file.stream().getReader();
+          let written = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+            written += value.byteLength;
+          }
+          const rem = written % 512;
+          if (rem) controller.enqueue(new Uint8Array(512 - rem));
+        }
+        controller.enqueue(zero());
+        controller.enqueue(zero());
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+  });
+}
+async function uploadScpCompressed(items, dir, signal) {
+  const conn = currentSshConnection;
+  const gz = buildTarGzStream(items).pipeThrough(new CompressionStream("gzip"));
+  const url = "/api/instances/" + encodeURIComponent(conn.instance.id) + "/files?provider=" + encodeURIComponent(conn.instance.provider);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/gzip",
+      "x-file-name": encodeURIComponent("upload.tar.gz"),
+      "x-relative-path": encodeURIComponent("upload.tar.gz"),
+      "x-remote-directory": dir,
+      "x-extract-archive": "1",
+    },
+    body: gz,
+    signal,
+    duplex: "half",
+  });
+  if (!response.ok) {
+    let detail = "HTTP " + response.status;
+    try {
+      const result = await response.json();
+      if (result.error) detail = result.error;
+    } catch {}
+    throw Error("压缩上传失败：" + detail);
+  }
+  return await response.json();
+}
 function uploadScpItem(item, dir, onProgress, onBrowserUploaded, signal) {
   return new Promise((resolve, reject) => {
     const url = `/api/instances/${encodeURIComponent(currentSshConnection.instance.id)}/files?provider=${encodeURIComponent(currentSshConnection.instance.provider)}`,
@@ -4014,7 +4173,7 @@ for (const field of [
     placeholder: "请输入 S3 Secret Access Key",
     description: "在供应商控制台创建的 S3 Secret Access Key（不是云账号登录密码）",
   },
-]
+])
   for (const id of field.ids) {
     const input = $(id),
     labelText = [...input.closest("label").childNodes].find(
@@ -4890,21 +5049,5 @@ instanceMetricsMarkup = function (instance) {
   return (
     multiGpuHealthMarkup(telemetryCache.get(String(instance.id))) +
     baseInstanceMetricsMarkup(instance)
-  );
-};
-const baseRenderBenchmarkReport = renderBenchmarkReport;
-renderBenchmarkReport = function (report, instance) {
-  baseRenderBenchmarkReport(report, instance);
-  const nccl = report.nccl;
-  if (!nccl) return;
-  const state = nccl.skipped || nccl.ok ? "pass" : "fail",
-    value = nccl.skipped
-      ? "单卡实例，已跳过"
-      : nccl.ok
-        ? "真实 all_reduce 通过"
-        : "失败：" + (nccl.error || "未知错误");
-  $("#benchmarkRows").insertAdjacentHTML(
-    "afterbegin",
-    `<div class="bench-row"><span>NCCL 集体通信</span><strong>${esc(value)}</strong><b class="${state}">${state === "pass" ? "PASS" : "FAIL"}</b></div>`,
   );
 };
