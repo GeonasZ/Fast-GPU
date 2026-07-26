@@ -1,8 +1,16 @@
-.instance-grid{align-items:start}
-.instance{transition:box-shadow .2s,border-color .2s}
-.instance.expanded{grid-column:1/-1;border-color:#b9d7c6;box-shadow:0 14px 34px #18312614}
-.instance-detail{display:none;margin-top:14px;padding:16px;border:1px solid var(--line);border-radius:9px;background:#fbfcfb}
-.instance.expanded .instance-detail{display:block}
+.instance-grid{align-items:start;container-type:inline-size}
+.instance{min-width:0;transition:box-shadow .28s ease,border-color .28s ease}
+.instance.expanded{border-color:#b9d7c6;box-shadow:0 14px 34px #18312614}
+.instance-panels{min-width:0}
+.instance.expanded .instance-panels{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start;gap:14px}
+.instance-detail{max-height:0;margin-top:0;padding:0 16px;overflow:hidden;visibility:hidden;opacity:0;transform:translateY(-8px);border:0 solid var(--line);border-radius:9px;background:#fbfcfb;transition:max-height .34s ease,margin-top .34s ease,padding .34s ease,border-width .34s ease,opacity .22s ease,transform .34s ease,visibility 0s linear .34s}
+.instance.expanded .instance-detail{max-height:720px;margin-top:0;padding:16px;visibility:visible;opacity:1;transform:none;border-width:1px;transition:max-height .42s ease,padding .34s ease,border-width .34s ease,opacity .25s ease .08s,transform .34s ease,visibility 0s}
+.instance.expanded .reachability-targets{grid-template-columns:repeat(2,minmax(0,1fr))}
+.instance-grid.layout-transitioning .instance-detail{transition:none}
+@container (min-width:816px){.instance.expanded{grid-column:span 2}}
+::view-transition-group(*){animation-duration:.32s;animation-timing-function:cubic-bezier(.22,.8,.24,1)}
+::view-transition-old(*),::view-transition-new(*){animation:none;mix-blend-mode:normal}
+@media(prefers-reduced-motion:reduce){.instance,.instance-detail{transition:none}::view-transition-group(*){animation-duration:0s}}
 .detail-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
 .detail-head small{display:block;color:var(--muted)}
 .detail-head button{border:1px solid var(--line);background:white;border-radius:6px;padding:6px 10px;cursor:pointer}
@@ -19,3 +27,42 @@
 .ssh-field span{color:var(--muted);font-size:11px}
 .ssh-field code,.ssh-command code{overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 .ssh-command{margin-top:12px;padding:12px;border-radius:7px;background:#f4f7f5}
+#sshTerminalDialog{width:min(1380px,calc(100vw - 40px));max-height:calc(100vh - 40px);padding:0;overflow:auto;background:#0b1210;color:#d9e7df}
+.terminal-shell{padding:20px}
+.terminal-head{position:sticky;z-index:10;top:-20px;display:flex;align-items:center;justify-content:space-between;margin:-20px -20px 14px;padding:12px 20px;border-bottom:1px solid #26372f;background:#0d1813;cursor:move;user-select:none}
+.terminal-head>div{display:flex;align-items:center;gap:12px}
+.terminal-head .eyebrow,.terminal-head h2{margin:0}
+.terminal-head h2{color:#fff}
+.terminal-head .terminal-head-actions{gap:8px}
+.terminal-help{padding:7px 11px;border:1px solid #3a5748;border-radius:6px;background:#14251d;color:#d9e7df;cursor:pointer}
+.terminal-help:hover{border-color:#62a57e;background:#1b3226}
+.terminal-close{border:0;background:transparent;color:#c8d5ce;font-size:26px;cursor:pointer}
+.terminal-workspace{display:flex;gap:12px;min-width:0}
+#sshTerminalOutput{flex:1;min-width:0;height:min(680px,76vh);overflow:hidden;border:1px solid #263a31;border-radius:8px;background:#050907;padding:8px}
+#sshTerminalOutput .xterm{height:100%}
+.terminal-transfer-panel{position:relative;width:min(460px,38vw);height:min(680px,76vh);padding-left:34px;overflow:auto;border:1px solid #31443a;border-radius:9px;background:#f6f8f7;color:var(--ink);transition:width .22s ease}
+.terminal-transfer-panel .files-column{padding:16px;border:0}
+.terminal-transfer-panel>button{position:absolute;z-index:3;left:0;top:0;width:34px;height:100%;padding:8px 5px;border:0;border-right:1px solid #cbd6d0;border-radius:8px 0 0 8px;background:#dfe8e3;color:#294336;cursor:pointer;writing-mode:vertical-rl;display:flex;align-items:center;justify-content:center;gap:8px}
+.terminal-transfer-panel>button span{letter-spacing:2px}
+.terminal-transfer-panel>button b{font-size:20px;line-height:1;transform:none;transition:transform .22s ease}
+.terminal-transfer-panel.collapsed{width:34px;padding-left:34px;overflow:hidden}
+.terminal-transfer-panel.collapsed>button b{transform:rotate(180deg)}
+.terminal-transfer-panel.collapsed #terminalTransferMount{display:none}
+#terminalShortcutDialog{width:min(620px,calc(100vw - 32px));padding:0;border:1px solid #cad8d0;border-radius:10px}
+#terminalShortcutDialog form{position:relative;padding:24px}
+#terminalShortcutDialog h2{margin:5px 0 18px}
+#terminalShortcutDialog .close{position:absolute;right:14px;top:10px;border:0;background:transparent;font-size:25px;cursor:pointer}
+.terminal-mode-setting{display:grid;grid-template-columns:110px minmax(220px,1fr);align-items:center;gap:12px;padding:12px;border-radius:8px;background:#edf4f0}
+.terminal-mode-setting select{padding:8px;border:1px solid #bdcec4;border-radius:6px;background:#fff}
+#terminalModeHint{margin:10px 2px 18px;color:var(--muted);font-size:12px}
+.terminal-shortcut-list{margin:0}
+.terminal-shortcut-list>div{display:grid;grid-template-columns:210px 1fr;gap:16px;padding:10px 2px;border-top:1px solid var(--line)}
+.terminal-shortcut-list dt,.terminal-shortcut-list dd{margin:0}
+.terminal-shortcut-list kbd{display:inline-block;min-width:25px;padding:2px 5px;border:1px solid #b8c6be;border-bottom-width:2px;border-radius:4px;background:#f8faf9;text-align:center;font:11px ui-monospace,SFMono-Regular,Consolas,monospace}
+#terminalShortcutDialog menu{display:flex;justify-content:flex-end;margin:18px 0 0;padding:0}
+#terminalContextMenu{position:fixed;z-index:10000;min-width:130px;padding:5px;border:1px solid #31483b;border-radius:7px;background:#101d17;box-shadow:0 10px 28px #0007}
+#terminalContextMenu[hidden]{display:none}
+#terminalContextMenu button{display:block;width:100%;padding:8px 12px;border:0;border-radius:4px;background:transparent;color:#e3eee8;text-align:left;cursor:pointer}
+#terminalContextMenu button:hover:not(:disabled){background:#284737}
+#terminalContextMenu button:disabled{color:#73847b;cursor:default}
+@media(max-width:900px){.terminal-transfer-panel{width:min(390px,46vw)}}

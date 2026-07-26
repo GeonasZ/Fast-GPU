@@ -70,7 +70,7 @@ def collect():
         index, name, util, used, total, temperature, power = values
         number = lambda value: float(value) if "." in value else int(value)
         gpus.append({"index": int(index), "name": name, "util": number(util), "memoryUsed": number(used), "memoryTotal": number(total), "temperature": number(temperature), "power": number(power)})
-    runtime = {"status": "ready", "phase": "telemetry_ready", "phaseLabel": "GPU 遥测已连接"}
+    runtime = {"status": "provisioning", "phase": "awaiting_bootstrap", "phaseLabel": "正在等待初始化脚本"}
     try:
         with open("/var/lib/gpu-fleet/profile.json", encoding="utf-8") as profile:
             runtime = json.load(profile)

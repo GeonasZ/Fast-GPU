@@ -1,0 +1,162 @@
+.desktop-titlebar {
+  position: fixed;
+  z-index: 20000;
+  inset: 0 0 auto;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #dce7e1;
+  background: #0a1510;
+  border-bottom: 1px solid #26372f;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.desktop-title {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-left: 14px;
+}
+
+.desktop-title-logo {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: #092413;
+  background: var(--green);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.desktop-title strong {
+  font-size: 12px;
+  letter-spacing: .2px;
+}
+
+.desktop-title > span:last-child {
+  color: #73877c;
+  font-size: 10px;
+}
+
+.desktop-window-controls {
+  height: 100%;
+  display: flex;
+  -webkit-app-region: no-drag;
+}
+
+.desktop-window-controls button {
+  width: 48px;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  color: #a9b8b0;
+  background: transparent;
+  font: 16px/1 ui-sans-serif, system-ui;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: color .12s ease, background-color .12s ease, box-shadow .12s ease, transform .08s ease;
+}
+
+.desktop-window-controls button:hover:not(:disabled) {
+  color: #fff;
+  background: #355246;
+  box-shadow: inset 0 -2px 0 #43dc83;
+  transform: none;
+}
+
+.desktop-window-controls button:active:not(:disabled) {
+  color: #fff;
+  background: #1c3027;
+  box-shadow: inset 0 0 0 1px #5f7d6d;
+  transform: scale(.94);
+}
+
+.desktop-window-controls button:focus-visible {
+  outline: 2px solid #43dc83;
+  outline-offset: -3px;
+}
+
+.desktop-window-controls button[data-window-action="close"]:hover:not(:disabled) {
+  color: #fff;
+  background: #c42b3b;
+  box-shadow: inset 0 -2px 0 #ff9ca7;
+}
+
+.desktop-window-controls button[data-window-action="close"]:active:not(:disabled) {
+  background: #9f2030;
+  box-shadow: inset 0 0 0 1px #ff7f8d;
+}
+
+.electron-client .sidebar {
+  top: 42px;
+  padding-top: 18px;
+}
+
+.electron-client .sidebar .brand {
+  display: none;
+}
+
+.electron-client {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.electron-client main {
+  position: fixed;
+  inset: 42px 0 0 238px;
+  min-height: 0;
+  margin-left: 0;
+  overflow: auto;
+}
+
+@media (max-width: 900px) {
+  .electron-client main {
+    left: 74px;
+  }
+}
+
+.electron-client dialog {
+  inset-block: 42px 0;
+  max-height: calc(100dvh - 66px);
+  overflow: auto;
+}
+
+.electron-client dialog::backdrop {
+  clip-path: inset(42px 0 0);
+}
+
+.control-plane-setup {
+  width: min(540px, calc(100vw - 40px));
+}
+
+.control-plane-setup form {
+  display: grid;
+  gap: 16px;
+}
+
+.control-plane-setup h2 {
+  font-size: 22px;
+}
+
+.control-plane-setup p {
+  color: var(--muted);
+}
+
+.control-plane-setup input {
+  margin-top: 5px;
+  font-size: 13px;
+}
+
+.control-plane-setup .setup-note {
+  padding: 11px 12px;
+  border: 1px solid #e7d49d;
+  border-radius: 7px;
+  color: #745c20;
+  background: #fff9e9;
+  font-size: 11px;
+}

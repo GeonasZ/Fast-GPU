@@ -1,31 +1,21 @@
 ARG NGC_IMAGE=nvcr.io/nvidia/pytorch:26.03-py3
 FROM ${NGC_IMAGE}
 
-ARG CODEX_VERSION
-ARG CLAUDE_CODE_VERSION
 ARG NVBANDWIDTH_REF=main
 
-LABEL org.opencontainers.image.title="GPU Fleet runtime" \
-      org.opencontainers.image.description="Prebuilt GPU Fleet validation and development runtime" \
-      io.gpu-fleet.codex.version="${CODEX_VERSION}" \
-      io.gpu-fleet.claude-code.version="${CLAUDE_CODE_VERSION}"
+LABEL org.opencontainers.image.title="Fast GPU runtime" \
+      org.opencontainers.image.description="Prebuilt Fast GPU validation and development runtime"
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    FLEET_PREBUILT_IMAGE=1 \
-    CODEX_VERSION=${CODEX_VERSION} \
-    CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
+    FLEET_PREBUILT_IMAGE=1
 
-RUN test -n "${CODEX_VERSION}" \
- && test -n "${CLAUDE_CODE_VERSION}" \
- && apt-get update \
+RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl jq pciutils git python3 python3-pip openssh-server iproute2 \
+      ca-certificates curl jq pciutils git python3 python3-pip openssh-server iproute2 tini \
       fio iperf3 nvme-cli cmake build-essential rclone \
       libboost-program-options-dev \
  && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
- && npm install -g --bin-links=true "@openai/codex@${CODEX_VERSION}" \
- && npm install -g --bin-links=true "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && git clone --filter=blob:none https://github.com/NVIDIA/nvbandwidth.git /tmp/nvbandwidth \
  && git -C /tmp/nvbandwidth checkout "${NVBANDWIDTH_REF}" \
  && cmake -S /tmp/nvbandwidth -B /tmp/nvbandwidth/build \
@@ -44,4 +34,5 @@ RUN chmod 0755 /opt/gpu-fleet/verify-image.sh /opt/gpu-fleet/ensure-ssh.sh
 EXPOSE 22 3000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=6 \
   CMD curl -fsS http://127.0.0.1:3000/health || exit 1
+ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 CMD ["node", "/opt/gpu-fleet/agent.js"]

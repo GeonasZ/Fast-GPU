@@ -31,3 +31,38 @@
 .instance-top .pill.stopping { color: #68736d; background: #f2f4f3; border-color: #dfe4e1; }
 .instance-top .pill.failed,
 .instance-top .pill.terminating { color: #b23b35; background: #fff0ef; border-color: #f1cfcc; }
+.instance-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.instance-toolbar div {
+  display: grid;
+  gap: 3px;
+}
+
+.instance-toolbar small {
+  color: var(--muted);
+}
+
+.adoption-endpoint {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px 130px;
+  gap: 12px;
+}
+
+#instanceAdoptionDialog textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  .adoption-endpoint {
+    grid-template-columns: 1fr;
+  }
+}

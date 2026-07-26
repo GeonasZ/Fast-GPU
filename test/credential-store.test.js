@@ -28,6 +28,7 @@ test('agent and SSH credentials share SQLite without storing plaintext secrets',
       privateKey: key.privateKey,
       internalPort: first.ssh.port,
     });
+    first.telemetryHistory.markSeen('runpod', 'pod-1', '2026-07-26T12:00:00.000Z');
     first.close();
 
     const database = fs.readFileSync(filename);
@@ -36,13 +37,24 @@ test('agent and SSH credentials share SQLite without storing plaintext secrets',
 
     const restarted = createCredentialStore(environment(filename));
     assert.equal(restarted.agents.authenticate(agent.agentId, agent.secret).provider_instance_id, 'pod-1');
+    assert.equal(restarted.agents.findByInstance('runpod', 'pod-1').instance_name, 'gpu-a');
+    assert.equal(restarted.agents.findByInstance('runpod', 'missing'), null);
     assert.equal(restarted.ssh.get('runpod', 'pod-1').privateKey, key.privateKey);
+    assert.equal(
+      restarted.telemetryHistory.get('runpod', 'pod-1').lastSeenAt,
+      '2026-07-26T12:00:00.000Z',
+    );
     restarted.ssh.update('runpod', 'pod-1', { host: '203.0.113.8', externalPort: 32123 });
     assert.equal(restarted.ssh.get('runpod', 'pod-1').externalPort, 32123);
     assert.equal(restarted.agents.revokeInstance('runpod', 'pod-1'), true);
+    const rotated = restarted.agents.create('runpod', 'gpu-a');
+    restarted.agents.bind(rotated.agentId, 'pod-1');
+    assert.equal(restarted.agents.findByInstance('runpod', 'pod-1').agent_id, rotated.agentId);
     assert.equal(restarted.ssh.remove('runpod', 'pod-1'), true);
+    assert.equal(restarted.telemetryHistory.remove('runpod', 'pod-1'), true);
     assert.equal(restarted.agents.authenticate(agent.agentId, agent.secret), null);
     assert.equal(restarted.ssh.get('runpod', 'pod-1'), null);
+    assert.equal(restarted.telemetryHistory.get('runpod', 'pod-1'), null);
     restarted.close();
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -76,9 +88,10 @@ test('SSH private keys cannot be decrypted with a different master key', () => {
     });
     first.close();
     const wrongKey = Buffer.alloc(32, 9).toString('base64');
-    const reopened = createCredentialStore(environment(filename, wrongKey));
-    assert.throws(() => reopened.ssh.get('runpod', 'pod-1'));
-    reopened.close();
+    assert.throws(
+      () => createCredentialStore(environment(filename, wrongKey)),
+      error => error.code === 'credential_encryption_key_mismatch' && /与现有凭据数据库不匹配/.test(error.message),
+    );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

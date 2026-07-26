@@ -1,18 +1,12 @@
-name: Update Codex runtime image
+name: Publish default runtime image
 
 on:
   schedule:
-    - cron: "23 3 * * *"
+    - cron: "23 3 * * 1"
   workflow_dispatch:
-    inputs:
-      force:
-        description: Rebuild even when this Codex version already exists
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
-  group: codex-runtime-image
+  group: runtime-images
   cancel-in-progress: false
 
 permissions:
@@ -20,46 +14,22 @@ permissions:
   packages: write
 
 jobs:
-  update:
+  publish:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      RUNTIME_VERSION: "26.03"
+      RUNTIME_BASE: nvcr.io/nvidia/pytorch:26.03-py3
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Detect latest stable CLI versions
-        id: release
-        shell: bash
-        env:
-          FORCE_REBUILD: ${{ inputs.force || 'false' }}
-        run: |
-          set -Eeuo pipefail
-          codex_version="$(npm view @openai/codex@latest version)"
-          claude_version="$(npm view @anthropic-ai/claude-code@latest version)"
-          image="ghcr.io/${GITHUB_REPOSITORY,,}-runtime"
-          tag="codex-${codex_version}-claude-${claude_version}"
-          build=true
-          if [[ "$FORCE_REBUILD" != "true" ]] && docker buildx imagetools inspect "${image}:${tag}" >/dev/null 2>&1; then
-            build=false
-          fi
-          echo "codex_version=${codex_version}" >> "$GITHUB_OUTPUT"
-          echo "claude_version=${claude_version}" >> "$GITHUB_OUTPUT"
-          echo "image=${image}" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "build=${build}" >> "$GITHUB_OUTPUT"
-
       - name: Build and publish candidate
-        if: steps.release.outputs.build == 'true'
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -67,43 +37,26 @@ jobs:
           file: Dockerfile.runtime
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.release.outputs.image }}:candidate-${{ github.run_id }}
-          build-args: |
-            CODEX_VERSION=${{ steps.release.outputs.codex_version }}
-            CLAUDE_CODE_VERSION=${{ steps.release.outputs.claude_version }}
+          tags: ghcr.io/${{ github.repository }}-runtime:candidate-${{ env.RUNTIME_VERSION }}-${{ github.run_id }}
+          build-args: NGC_IMAGE=${{ env.RUNTIME_BASE }}
           labels: |
-            io.gpu-fleet.codex.version=${{ steps.release.outputs.codex_version }}
-            io.gpu-fleet.claude-code.version=${{ steps.release.outputs.claude_version }}
+            io.gpu-fleet.pytorch.version=${{ env.RUNTIME_VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Test candidate image
-        if: steps.release.outputs.build == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          candidate="${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}"
-          docker pull "$candidate"
-          docker run --rm --entrypoint /opt/gpu-fleet/verify-image.sh "$candidate"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}-runtime@${{ steps.build.outputs.digest }}"
+          docker pull "$image"
+          docker run --rm --entrypoint /opt/gpu-fleet/verify-image.sh "$image"
 
       - name: Promote tested digest
-        if: steps.release.outputs.build == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          image="${{ steps.release.outputs.image }}"
-          source="${image}@${{ steps.build.outputs.digest }}"
-          docker buildx imagetools create \
-            --tag "${image}:${{ steps.release.outputs.tag }}" \
-            --tag "${image}:stable" \
-            "$source"
-
-      - name: Summary
-        shell: bash
-        run: |
-          if [[ "${{ steps.release.outputs.build }}" == "true" ]]; then
-            echo "Promoted Codex ${{ steps.release.outputs.codex_version }} and Claude Code ${{ steps.release.outputs.claude_version }} to ${{ steps.release.outputs.image }}:stable" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Codex ${{ steps.release.outputs.codex_version }} and Claude Code ${{ steps.release.outputs.claude_version }} are already published; nothing to do." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          image="ghcr.io/${GITHUB_REPOSITORY,,}-runtime"
+          tags=(--tag "${image}:pytorch-2.11-cuda13.2-ngc26.03" --tag "${image}:stable-cuda13")
+          docker buildx imagetools create "${tags[@]}" "${image}@${{ steps.build.outputs.digest }}"

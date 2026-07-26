@@ -15,6 +15,7 @@ Port ${ssh_port}
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PubkeyAuthentication yes
+PermitEmptyPasswords no
 PermitRootLogin prohibit-password
 EOF
 

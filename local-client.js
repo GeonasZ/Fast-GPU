@@ -1,0 +1,251 @@
+const {app,BrowserWindow,dialog,shell,ipcMain}=require('electron');
+const {spawn}=require('node:child_process');
+const http=require('node:http');
+const net=require('node:net');
+const fs=require('node:fs');
+const path=require('node:path');
+const {randomBytes,createHash}=require('node:crypto');
+
+const port=Number(process.env.PORT||4173);
+const remoteArgument=process.argv.find(value=>value.startsWith('--remote-url='));
+const remoteUrl=remoteArgument?remoteArgument.slice('--remote-url='.length).replace(/\/+$/,''):'';
+const url=remoteUrl||`http://127.0.0.1:${port}`;
+const allInOne=!remoteUrl;
+const dataDirectory=path.join(__dirname,'.data');
+const keyFile=path.join(dataDirectory,'local-client.key');
+const localDatabase=path.join(dataDirectory,'local-fleet.sqlite');
+const controlName=`gpu-fleet-${createHash('sha256').update(__dirname).digest('hex').slice(0,16)}`;
+const controlEndpoint=process.platform==='win32'
+  ?`\\\\.\\pipe\\${controlName}`
+  :path.join(dataDirectory,`${controlName}.sock`);
+
+let serverProcess=null;
+let mainWindow=null;
+let controlServer=null;
+let quitting=false;
+let forceExitTimer=null;
+
+app.setName('Fast GPU');
+app.setPath('userData',path.join(dataDirectory,'electron-profile'));
+
+function localEncryptionKey(){
+  const configured=String(process.env.FLEET_CREDENTIAL_ENCRYPTION_KEY||'').trim();
+  if(configured)return configured;
+  fs.mkdirSync(dataDirectory,{recursive:true});
+  try{
+    const saved=fs.readFileSync(keyFile,'utf8').trim();
+    if(/^[a-f0-9]{64}$/i.test(saved))return saved;
+    throw new Error('本地客户端密钥文件格式错误，请恢复原文件或设置 FLEET_CREDENTIAL_ENCRYPTION_KEY');
+  }catch(error){
+    if(error.code!=='ENOENT')throw error;
+    const generated=randomBytes(32).toString('hex');
+    fs.writeFileSync(keyFile,generated+'\n',{encoding:'utf8',mode:0o600,flag:'wx'});
+    console.log(`已创建本地凭据主密钥：${keyFile}`);
+    console.log('请备份此文件；丢失后将无法读取已保存的 SSH 私钥和供应商 API Key。');
+    return generated;
+  }
+}
+
+function startServer(){
+  const encryptionKey=localEncryptionKey();
+  const nodeExecutable=process.env.npm_node_execpath||'node';
+  serverProcess=spawn(nodeExecutable,[path.join(__dirname,'server.js')],{
+    cwd:__dirname,
+    env:{
+      ...process.env,
+      FLEET_CREDENTIAL_ENCRYPTION_KEY:encryptionKey,
+      FLEET_DATABASE_PATH:process.env.FLEET_DATABASE_PATH||localDatabase,
+      FLEET_CLIENT_MODE:'local',
+      FLEET_DEPLOYMENT_MODE:'all-in-one',
+      FLEET_PARENT_PID:String(process.pid),
+      HOST:'127.0.0.1',
+      PORT:String(port),
+    },
+    stdio:'inherit',
+    windowsHide:true,
+  });
+  serverProcess.once('error',error=>failAndQuit(`本地服务启动失败：${error.message}`));
+  serverProcess.once('exit',code=>{
+    serverProcess=null;
+    if(!quitting)failAndQuit(`本地服务意外退出${code==null?'':`（退出码 ${code}）`}`);
+  });
+}
+
+function waitUntilReady(){
+  return new Promise((resolve,reject)=>{
+    let attempts=0;
+    const probe=()=>{
+      const request=http.get(url,response=>{
+        response.resume();
+        if(response.statusCode&&response.statusCode<500)return resolve();
+        retry();
+      });
+      request.setTimeout(2000,()=>request.destroy());
+      request.once('error',retry);
+    };
+    const retry=()=>{
+      if(++attempts>=120)return reject(new Error('本地客户端在 60 秒内未能响应，请检查终端中的服务错误'));
+      setTimeout(probe,500);
+    };
+    probe();
+  });
+}
+
+function stopServer(){
+  if(!serverProcess||serverProcess.killed)return;
+  const processToStop=serverProcess;
+  serverProcess.kill('SIGTERM');
+  const forceStop=setTimeout(()=>{
+    if(processToStop.exitCode==null)processToStop.kill('SIGKILL');
+  },1500);
+  forceStop.unref();
+}
+
+function showMainWindow(){
+  if(!mainWindow)return;
+  if(!mainWindow.isVisible())mainWindow.show();
+  if(mainWindow.isMinimized())mainWindow.restore();
+  mainWindow.focus();
+}
+
+function shutdown(){
+  if(quitting)return;
+  quitting=true;
+  controlServer?.close();
+  stopServer();
+  forceExitTimer=setTimeout(()=>app.exit(0),2500);
+  app.quit();
+}
+
+function startControlServer(){
+  if(process.platform!=='win32'&&fs.existsSync(controlEndpoint))fs.unlinkSync(controlEndpoint);
+  controlServer=net.createServer(socket=>{
+    socket.setEncoding('utf8');
+    socket.once('data',command=>{
+      if(command.trim()==='shutdown'){
+        socket.end('ok');
+        shutdown();
+        return;
+      }
+      showMainWindow();
+      socket.end('ok');
+    });
+  });
+  controlServer.on('error',error=>{
+    if(!quitting)console.error(`一体化客户端控制通道错误：${error.message}`);
+  });
+  controlServer.listen(controlEndpoint);
+}
+
+function failAndQuit(message){
+  if(quitting)return;
+  quitting=true;
+  console.error(message);
+  if(app.isReady())dialog.showErrorBox('Fast GPU 启动失败',message);
+  stopServer();
+  app.quit();
+}
+
+function createWindow(){
+  mainWindow=new BrowserWindow({
+    width:1440,
+    height:920,
+    minWidth:980,
+    minHeight:680,
+    show:true,
+    autoHideMenuBar:true,
+    backgroundColor:'#f5f7fb',
+    title:'Fast GPU',
+    frame:false,
+    webPreferences:{
+      contextIsolation:true,
+      nodeIntegration:false,
+      sandbox:true,
+      preload:path.join(__dirname,'electron-preload.js'),
+    },
+  });
+  const publishMaximized=()=>mainWindow?.webContents.send('window:maximized-change',mainWindow.isMaximized());
+  mainWindow.on('maximize',publishMaximized);
+  mainWindow.on('unmaximize',publishMaximized);
+  const splash=`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="color-scheme" content="dark">
+    <style>
+      *{box-sizing:border-box}body{margin:0;background:#0d1813;color:#dce7e1;font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif}
+      header{height:42px;padding:0 14px;display:flex;align-items:center;gap:9px;background:#0a1510;border-bottom:1px solid #26372f;-webkit-app-region:drag}
+      i{width:22px;height:22px;display:grid;place-items:center;border-radius:6px;background:#25c46a;color:#092413;font-style:normal;font-weight:900}
+      main{min-height:calc(100vh - 42px);display:grid;place-items:center;text-align:center}.spinner{width:34px;height:34px;margin:0 auto 16px;border:3px solid #355246;border-top-color:#43dc83;border-radius:50%;animation:spin .8s linear infinite}
+      h1{margin:0 0 5px;font-size:18px}p{margin:0;color:#829087}@keyframes spin{to{transform:rotate(360deg)}}
+    </style><header><i>G</i><strong>Fast GPU</strong></header><main><div><div class="spinner"></div><h1>正在启动一体化控制面</h1><p>正在打开本地服务与持久化配置…</p></div></main></html>`;
+  mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(splash)}`);
+  mainWindow.webContents.setWindowOpenHandler(({url:target})=>{
+    if(target.startsWith(url))return {action:'allow'};
+    shell.openExternal(target);
+    return {action:'deny'};
+  });
+  mainWindow.webContents.on('will-navigate',(event,target)=>{
+    if(!target.startsWith(url)){
+      event.preventDefault();
+      shell.openExternal(target);
+    }
+  });
+  mainWindow.on('closed',()=>{
+    mainWindow=null;
+    shutdown();
+  });
+  return mainWindow;
+}
+
+function electronWindowFor(event){
+  const window=BrowserWindow.fromWebContents(event.sender);
+  return window===mainWindow?window:null;
+}
+ipcMain.handle('window:minimize',event=>electronWindowFor(event)?.minimize());
+ipcMain.handle('window:toggle-maximize',event=>{
+  const window=electronWindowFor(event);
+  if(!window)return false;
+  window.isMaximized()?window.unmaximize():window.maximize();
+  return window.isMaximized();
+});
+ipcMain.handle('window:is-maximized',event=>Boolean(electronWindowFor(event)?.isMaximized()));
+ipcMain.handle('window:close',event=>electronWindowFor(event)?.close());
+ipcMain.handle('dialog:pick-directory',async event=>{
+  const window=electronWindowFor(event);
+  if(!window)return null;
+  const result=await dialog.showOpenDialog(window,{title:'选择要上传的文件夹',properties:['openDirectory','createDirectory']});
+  return result.canceled?null:result.filePaths[0]||null;
+});
+
+if(!app.requestSingleInstanceLock()){
+  app.quit();
+}else{
+  if(allInOne)startControlServer();
+  app.on('second-instance',()=>{
+    showMainWindow();
+  });
+  app.whenReady().then(async()=>{
+    try{
+      createWindow();
+      if(allInOne){
+        startServer();
+        await waitUntilReady();
+      }
+      await mainWindow.loadURL(`${url}/?client=1`);
+      showMainWindow();
+      console.log(allInOne?'一体化控制面已就绪，Electron 客户端已打开。':`Electron 客户端已连接：${url}`);
+    }catch(error){
+      failAndQuit(error.message);
+    }
+  });
+}
+
+app.on('before-quit',()=>{
+  quitting=true;
+  controlServer?.close();
+  stopServer();
+  if(!forceExitTimer)forceExitTimer=setTimeout(()=>app.exit(0),2500);
+});
+
+app.on('window-all-closed',()=>app.quit());
+
+for(const signal of ['SIGINT','SIGTERM']){
+  process.once(signal,shutdown);
+}

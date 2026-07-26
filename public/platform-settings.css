@@ -1,0 +1,126 @@
+.platform-settings-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.platform-settings-head h2 {
+  margin: 4px 0;
+  font-size: 24px;
+}
+
+.platform-settings-head p {
+  color: var(--muted);
+}
+
+.platform-settings-form {
+  max-width: 760px;
+  padding: 24px;
+}
+
+.platform-settings-form label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.platform-settings-form input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  background: #fff;
+}
+
+.platform-settings-form input:disabled {
+  color: var(--muted);
+  background: #f3f5f4;
+}
+
+.platform-settings-form small {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.platform-settings-status {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  color: #526159;
+  background: #f3f6f4;
+}
+
+.platform-settings-status.configured {
+  color: #176535;
+  background: #e7f7ec;
+}
+
+.platform-settings-status.missing {
+  color: #73510b;
+  background: #fff4d8;
+}
+
+.platform-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+.local-tool-card {
+  max-width: 760px;
+  margin-top: 14px;
+  padding: 20px 24px;
+}
+
+.tunnel-settings-card {
+  margin-top: 0;
+  margin-bottom: 14px;
+}
+
+.local-tool-card h3 { margin: 0 0 5px; }
+.local-tool-card-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.local-tool-card-head button { flex: none; }
+.local-tool-card p, .tool-note { color: var(--muted); }
+.local-tool-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0; }
+.local-tool-choices[hidden] { display: none; }
+.local-tool-choices button { display: grid; gap: 4px; padding: 12px; text-align: left; }
+.local-tool-choices small { color: inherit; opacity: .7; font-weight: 400; }
+.tool-note { display: block; margin-top: 12px; line-height: 1.6; }
+.tunnel-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.tunnel-toggle input { width: 17px; height: 17px; accent-color: #176535; }
+.telemetry-mode-options { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; }
+.telemetry-mode-options legend { margin-bottom: 8px; font-weight: 700; }
+.telemetry-mode-options label { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.telemetry-mode-options label:has(input:checked) { border-color: #25a65a; background: #effaf3; }
+.telemetry-mode-options input { margin-top: 3px; accent-color: #176535; }
+.telemetry-mode-options span { display: grid; gap: 3px; }
+.telemetry-mode-options small { color: var(--muted); font-weight: 400; }
+#namedTunnelFields { display: grid; gap: 12px; }
+#namedTunnelFields[hidden] { display: none; }
+.named-tunnel-heading { display: flex; align-items: center; gap: 8px; }
+.info-button { width: 24px; height: 24px; padding: 0; border-radius: 50%; font-weight: 800; }
+#cloudflareActions { justify-content: flex-start; }
+#namedTunnelHelpDialog { width: min(620px, calc(100vw - 40px)); }
+.named-tunnel-steps { display: grid; gap: 12px; padding-left: 22px; }
+.named-tunnel-steps li { padding-left: 5px; }
+.named-tunnel-steps li span { display: block; margin-top: 3px; color: var(--muted); line-height: 1.55; }
+.security-note { padding: 12px; border: 1px solid #e8cf97; border-radius: 8px; background: #fff8e7; color: #79580d; }
+.local-tools-list { display: grid; margin-top: 14px; border-top: 1px solid var(--line); }
+.local-tool-row { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: center; gap: 10px 18px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.local-tool-row > div:first-child { display: grid; gap: 4px; }
+.local-tool-row small { color: var(--muted); }
+.local-tool-state { padding: 5px 9px; border-radius: 999px; font-size: 11px; white-space: nowrap; }
+.local-tool-state.ready { color: #176535; background: #e7f7ec; }
+.local-tool-state.missing { color: #73510b; background: #fff4d8; }
+.local-tool-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
+.local-tool-actions button { padding: 8px 10px; }
+.local-tool-card.unavailable { opacity: .72; }
+@media (max-width: 680px) {
+  .local-tool-row { grid-template-columns: 1fr; }
+  .local-tool-state { justify-self: start; }
+  .local-tool-actions { justify-content: stretch; }
+  .local-tool-actions button { flex: 1; }
+}
