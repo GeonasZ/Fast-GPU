@@ -138,6 +138,7 @@
 .existing-storage > small { grid-column: 1 / -1; }
 @media (max-width: 1200px) { .existing-storage { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .storage-settings { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.storage-settings #s3Status { max-width: 58%; white-space: normal; text-align: right; }
 .storage-settings p, .s3-actions small { color: var(--muted); }
 .storage-provider-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .s3-form { min-width: 0; margin: 0; padding: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -173,6 +174,30 @@
 .searchable-select-option small { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; font-weight: 500; white-space: nowrap; }
 .searchable-select-empty { padding: 26px 10px; color: var(--muted); text-align: center; }
 .storage-provider-hint { grid-column: 1 / -1; }
+.storage-upload-card { margin-top: 16px; padding: 22px; }
+.storage-upload-head { margin-bottom: 16px; }
+.storage-upload-head p { color: var(--muted); }
+.storage-upload-queue { display: grid; gap: 8px; margin-bottom: 16px; }
+.storage-upload-queue-head { display: flex; justify-content: space-between; align-items: center; }
+.storage-upload-queue-head small, .storage-upload-queue-empty { color: var(--muted); }
+.storage-upload-queue-empty { padding: 12px; border: 1px dashed var(--line); border-radius: 7px; text-align: center; }
+.storage-upload-item { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; }
+.storage-upload-item > div:first-child { min-width: 0; display: grid; gap: 2px; }
+.storage-upload-item span, .storage-upload-item small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.storage-upload-item > div:last-child { display: flex; flex-shrink: 0; gap: 8px; }
+.storage-upload-item button, .storage-upload-actions button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; }
+.storage-upload-actions .primary { color: #fff; background: var(--dark); border-color: var(--dark); }
+.storage-upload-actions .danger { color: #b42318; background: #fff; border-color: #f0b9b4; }
+.storage-upload-item .selection-remove { color: #b42318; }
+#storageUploadForm { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+#storageUploadForm[hidden] { display: none; }
+#storageUploadForm label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+.storage-upload-drop, .storage-upload-progress, .storage-upload-actions, #storageUploadHint { grid-column: 1 / -1; }
+.storage-upload-drop .drop-zone { padding: 20px; display: grid; gap: 4px; border: 1px dashed #9eb9aa; border-radius: 7px; background: #f7faf8; cursor: pointer; text-align: center; }
+.storage-upload-drop small, #storageUploadHint { color: var(--muted); overflow-wrap: anywhere; }
+.progress-track { height: 6px; overflow: hidden; border-radius: 3px; background: #e7ece9; }
+.progress-fill { width: 0; height: 100%; background: var(--green); transition: width .2s; }
+.storage-upload-stats { display: flex; justify-content: space-between; margin-top: 6px; color: var(--muted); font-size: 12px; }
 .s3-actions { margin-top: 16px; padding: 16px 22px; display: flex; align-items: end; gap: 18px; }
 .s3-actions label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
 .s3-actions small { flex: 1; }
@@ -189,7 +214,8 @@
 @media (prefers-reduced-motion: reduce) {
   .instance-actions [data-ssh].ssh-loading { animation: none; border-color: #25c46a; }
 }
-@media (max-width: 800px) { .ssh-transfer-columns, .transfer-row, .storage-provider-grid, .s3-form { grid-template-columns: 1fr; } .s3-actions { align-items: stretch; flex-direction: column; } #sshDialog { width: calc(100vw - 28px); } }
+@media (max-width: 800px) { .ssh-transfer-columns, .transfer-row, .storage-provider-grid, .s3-form { grid-template-columns: 1fr; } .s3-actions { align-items: stretch; flex-direction: column; } .storage-settings { align-items: flex-start; gap: 12px; flex-direction: column; } .storage-settings #s3Status { max-width: 100%; text-align: left; } #sshDialog { width: calc(100vw - 28px); } }
+@media (max-width: 800px) { #storageUploadForm { grid-template-columns: 1fr; } .storage-upload-item { align-items: stretch; flex-direction: column; } .storage-upload-item > div:last-child { justify-content: flex-end; } }
 @media (max-width: 800px) { .sync-paths { grid-template-columns: 1fr; } .sync-path-arrow { display: none; } }
 /* Compress-before-transfer toggle (SCP upload and rsync/rclone sync panels) */
 .compress-toggle { display: flex; align-items: center; gap: 8px; grid-column: 1 / -1; margin: 2px 0 6px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }

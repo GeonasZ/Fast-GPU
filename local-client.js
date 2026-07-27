@@ -213,6 +213,12 @@ ipcMain.handle('dialog:pick-directory',async event=>{
   const result=await dialog.showOpenDialog(window,{title:'选择要上传的文件夹',properties:['openDirectory','createDirectory']});
   return result.canceled?null:result.filePaths[0]||null;
 });
+ipcMain.handle('dialog:pick-files',async event=>{
+  const window=electronWindowFor(event);
+  if(!window)return [];
+  const result=await dialog.showOpenDialog(window,{title:'选择要上传到对象存储的文件',properties:['openFile']});
+  return result.canceled?[]:result.filePaths;
+});
 
 if(!app.requestSingleInstanceLock()){
   app.quit();

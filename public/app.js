@@ -4276,9 +4276,10 @@ $("#r2Region").insertAdjacentHTML(
 );
 $("#s3Form").insertAdjacentHTML(
   "afterend",
-  '<form id="existingStorageForm" class="table-card existing-storage"><div><span class="eyebrow">EXISTING INSTANCE</span><h3>应用到已有实例</h3><p>选择 Bucket 内的 Prefix，同步到实例目录，或在实例支持 FUSE 时只读挂载。</p></div><label>运行中的实例<select id="existingStorageInstance" required><option value="">正在加载…</option></select></label><label>存储源<select id="existingStorageProvider"><option value="r2">Cloudflare R2</option><option value="oss">阿里云 OSS</option></select></label><label>Prefix（留空使用已保存值）<input id="existingStoragePrefix" placeholder="datasets/project-a"></label><label>目标目录<input id="existingStorageTarget" value="/data/datasets"></label><label>操作<select id="existingStorageMode"><option value="copy">选择性同步（不删除目标中多余文件）</option><option value="mount">只读自动挂载（需要 FUSE）</option></select></label><button class="primary" type="submit">应用到实例</button><small id="existingStorageHint">同步内容保留到实例磁盘；挂载在实例重启后需要重新应用。</small></form>',
+  '<form id="existingStorageForm" class="table-card existing-storage"><div><span class="eyebrow">EXISTING INSTANCE</span><h3>同步 S3 数据到已有实例</h3><p>把指定 Prefix 的数据同步到实例目录，或在实例支持 FUSE 时只读挂载。</p></div><label>运行中的实例<select id="existingStorageInstance" required><option value="">正在加载…</option></select></label><label>存储源<select id="existingStorageProvider"><option value="r2">Cloudflare R2</option><option value="oss">阿里云 OSS</option></select></label><label>Prefix（当前值；空值表示 Bucket 根目录）<input id="existingStoragePrefix" placeholder="Bucket 根目录"></label><label>目标目录<input id="existingStorageTarget" value="/data/datasets"></label><label>操作<select id="existingStorageMode"><option value="copy">选择性同步（不删除目标中多余文件）</option><option value="mount">只读自动挂载（需要 FUSE）</option></select></label><button class="primary" type="submit">同步到实例</button><small id="existingStorageHint">同步内容保留到实例磁盘；挂载在实例重启后需要重新连接。</small></form>',
 );
 let existingStorageInstances = new Map();
+let existingStorageProviderConfigs = {};
 async function loadExistingStorageInstances() {
   const response = await request("/api/instances");
   const available = response.instances || [];
@@ -4294,6 +4295,8 @@ $("#existingStorageMode").onchange = function () {
     this.value === "mount" ? `/data/object-storage/${$("#existingStorageProvider").value}` : "/data/datasets";
 };
 $("#existingStorageProvider").onchange = function () {
+  $("#existingStoragePrefix").value =
+    existingStorageProviderConfigs[this.value]?.prefix || "";
   if ($("#existingStorageMode").value === "mount")
     $("#existingStorageTarget").value = `/data/object-storage/${this.value}`;
 };
@@ -4304,9 +4307,9 @@ $("#existingStorageForm").onsubmit = async function (event) {
     instance = existingStorageInstances.get(id);
   if (!instance) return toast("请选择一个运行中的实例");
   if (instance.status !== "running")
-    return toast("请先启动实例，再应用或挂载 S3 配置");
-  setButtonBusy(button, "正在应用…");
-  $("#existingStorageHint").textContent = "实例正在连接对象存储，请勿关闭应用…";
+    return toast("请先启动实例，再同步或挂载 S3 数据");
+  setButtonBusy(button, "正在同步…");
+  $("#existingStorageHint").textContent = "实例正在连接并同步 S3 数据，请勿关闭应用…";
   try {
     const result = await request(`/api/instances/${encodeURIComponent(id)}/object-storage`, {
       method: "POST",
@@ -4314,16 +4317,16 @@ $("#existingStorageForm").onsubmit = async function (event) {
       body: JSON.stringify({
         instanceProvider: instance.provider,
         provider: $("#existingStorageProvider").value,
-        prefix: $("#existingStoragePrefix").value || undefined,
+        prefix: $("#existingStoragePrefix").value,
         target: $("#existingStorageTarget").value,
         mode: $("#existingStorageMode").value,
       }),
     });
-    $("#existingStorageHint").textContent = result.output || `已应用到 ${result.target}`;
+    $("#existingStorageHint").textContent = result.output || `已同步到 ${result.target}`;
     toast(result.mode === "mount" ? "对象存储已只读挂载" : "对象存储同步完成");
   } catch (error) {
     $("#existingStorageHint").textContent = error.message;
-    toast("应用对象存储失败：" + error.message);
+    toast("同步 S3 数据失败：" + error.message);
   } finally {
     clearButtonBusy(button);
   }
@@ -4348,6 +4351,8 @@ $("#existingStorageInstance").onchange = async function () {
     );
     if (!state.provider) return;
     $("#existingStorageProvider").value = state.provider;
+    $("#existingStoragePrefix").value =
+      existingStorageProviderConfigs[state.provider]?.prefix || "";
     $("#existingStorageTarget").value = state.target || "/data/datasets";
     $("#existingStorageMode").value = state.mode || "copy";
     $("#existingStorageHint").textContent =
@@ -4414,6 +4419,156 @@ function setPageTitleAlert(text) {
   alert.textContent = text;
   alert.hidden = false;
 }
+// 根据已启用且已配置的供应商，刷新「上传到对象存储」卡片的目标 Bucket 选择器，
+// 并在没有任何可用源时回退到占位提示。保存后 loadS3Config() 会调用本函数，
+// 因此绝不能缺失，否则保存即使成功也会因为这里抛 ReferenceError 而提示「保存失败」。
+function updateStorageUploadProviders(providers) {
+  const select = $("#storageUploadProvider"),
+    unavailable = $("#storageUploadUnavailable"),
+    form = $("#storageUploadForm");
+  if (!select || !unavailable || !form) return;
+  const labels = { r2: "Cloudflare R2", oss: "阿里云 OSS" };
+  const available = Object.entries(providers || {}).filter(
+    ([, item]) => item && item.enabled && item.configured,
+  );
+  const previous = select.value;
+  select.innerHTML = available
+    .map(
+      ([id, item]) =>
+        `<option value="${esc(id)}">${esc(labels[id] || id.toUpperCase())}${item.bucket ? " · " + esc(item.bucket) : ""}</option>`,
+    )
+    .join("");
+  if (available.length) {
+    if (!available.some(([id]) => id === previous)) select.value = available[0][0];
+    unavailable.hidden = true;
+    form.hidden = false;
+  } else {
+    unavailable.hidden = false;
+    form.hidden = true;
+  }
+}
+let selectedStorageUploadPath = "";
+let runningStorageUploadId = "";
+async function loadStorageUploadQueue() {
+  const queue = $("#storageUploadQueue");
+  if (!queue) return;
+  try {
+    const result = await request("/api/storage/uploads"),
+      uploads = result.uploads || [];
+    queue.innerHTML = uploads.length
+      ? `<div class="storage-upload-queue-head"><strong>中断的上传</strong><small>${uploads.length} 个任务</small></div>${uploads
+          .map(
+            (item) =>
+              `<div class="storage-upload-item"><div><strong>${esc(item.fileName || item.key)}</strong><span>${esc(item.localPath || "浏览器临时文件")}</span><small>${esc(item.provider.toUpperCase())} · ${esc(item.bucket || "")} · ${esc(item.key)} · ${(Number(item.fileSize || 0) / 1024 / 1024).toFixed(1)} MiB</small></div><div><button type="button" data-storage-resume="${esc(item.uploadId)}">继续上传</button><button type="button" class="selection-remove" data-storage-delete="${esc(item.uploadId)}">删除并清理 S3</button></div></div>`,
+          )
+          .join("")}`
+      : '<div class="storage-upload-queue-empty">没有中断的上传任务</div>';
+    if (result.removed?.length)
+      toast(`已清理 ${result.removed.length} 个本地文件不存在的上传缓存`);
+  } catch (error) {
+    queue.innerHTML = `<div class="storage-upload-queue-empty">读取上传任务失败：${esc(error.message)}</div>`;
+  }
+}
+async function runPersistedStorageUpload(uploadId, button) {
+  runningStorageUploadId = uploadId;
+  $("#storageUploadTerminate").hidden = false;
+  setButtonBusy(button, "上传中…");
+  try {
+    const result = await request(
+      `/api/storage/uploads/${encodeURIComponent(uploadId)}/run`,
+      { method: "POST" },
+    );
+    $("#storageUploadStatus").textContent = `上传完成：${result.key}`;
+    $("#storageUploadBar").style.width = "100%";
+    toast("文件已上传到对象存储");
+  } catch (error) {
+    if (runningStorageUploadId === uploadId) {
+      $("#storageUploadStatus").textContent = `上传中断：${error.message}`;
+      toast("上传中断，任务已保留：" + error.message);
+    }
+  } finally {
+    if (runningStorageUploadId === uploadId) {
+      runningStorageUploadId = "";
+      $("#storageUploadTerminate").hidden = true;
+    }
+    clearButtonBusy(button);
+    await loadStorageUploadQueue();
+  }
+}
+$("#storageUploadTerminate").onclick = async function () {
+  const uploadId = runningStorageUploadId;
+  if (!uploadId) return;
+  setButtonBusy(this, "正在终止…");
+  try {
+    await request(`/api/storage/uploads/${encodeURIComponent(uploadId)}`, {
+      method: "DELETE",
+    });
+    runningStorageUploadId = "";
+    this.hidden = true;
+    $("#storageUploadStatus").textContent = "上传已终止，S3 分片已清理";
+    toast("上传已终止并清理");
+  } catch (error) {
+    toast("终止上传失败：" + error.message);
+  } finally {
+    clearButtonBusy(this);
+    await loadStorageUploadQueue();
+  }
+};
+$("#storageUploadQueue").onclick = async function (event) {
+  const resume = event.target.closest("[data-storage-resume]"),
+    remove = event.target.closest("[data-storage-delete]");
+  if (resume)
+    return runPersistedStorageUpload(resume.dataset.storageResume, resume);
+  if (!remove) return;
+  setButtonBusy(remove, "正在清理…");
+  try {
+    await request(
+      `/api/storage/uploads/${encodeURIComponent(remove.dataset.storageDelete)}`,
+      { method: "DELETE" },
+    );
+    toast("上传记录和 S3 分片已清理");
+  } catch (error) {
+    toast("清理上传任务失败：" + error.message);
+  } finally {
+    await loadStorageUploadQueue();
+  }
+};
+$("#storageUploadDrop").onclick = async function () {
+  if (!window.gpuFleetWindow?.pickFiles)
+    return toast("持久化上传需要使用桌面客户端");
+  const paths = await window.gpuFleetWindow.pickFiles();
+  selectedStorageUploadPath = paths?.[0] || "";
+  $("#storageUploadFileLabel").textContent =
+    selectedStorageUploadPath || "尚未选择文件";
+  if (selectedStorageUploadPath && !$("#storageUploadKey").value)
+    $("#storageUploadKey").value = selectedStorageUploadPath.split(/[\\/]/).pop();
+};
+$("#storageUploadStart").onclick = async function () {
+  if (!selectedStorageUploadPath) return toast("请先选择本地文件");
+  const button = this;
+  setButtonBusy(button, "正在创建任务…");
+  try {
+    const created = await request("/api/storage/uploads", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: $("#storageUploadProvider").value,
+        localPath: selectedStorageUploadPath,
+        key:
+          $("#storageUploadKey").value ||
+          selectedStorageUploadPath.split(/[\\/]/).pop(),
+      }),
+    });
+    selectedStorageUploadPath = "";
+    $("#storageUploadFileLabel").textContent = "尚未选择文件";
+    clearButtonBusy(button);
+    await loadStorageUploadQueue();
+    await runPersistedStorageUpload(created.uploadId, button);
+  } catch (error) {
+    toast("创建上传任务失败：" + error.message);
+    clearButtonBusy(button);
+  }
+};
 async function loadS3Config() {
   let c;
   try {
@@ -4430,6 +4585,8 @@ async function loadS3Config() {
   } catch (_instanceError) {
     $("#existingStorageInstance").innerHTML = '<option value="">请先启动实例</option>';
   }
+  existingStorageProviderConfigs = c.providers || {};
+  await loadStorageUploadQueue();
   for (const [provider, fields] of Object.entries(storageProviderFields)) {
     const item = c.providers?.[provider] || {};
     $(fields.enabled).checked = Boolean(item.enabled);
@@ -4450,20 +4607,44 @@ async function loadS3Config() {
    $(fields.accessKey).value = item.accessKeyId || "";
    $(fields.secretKey).value = item.secretAccessKey || "";
   $(fields.accessKey).placeholder = "S3 Access Key ID";
- $(fields.hint).textContent = item.configured
-     ? `已保存 Bucket：${item.bucket}`
-     : "尚未配置";
+    const verification = item.verification;
+    $(fields.hint).textContent = item.configured
+      ? verification
+        ? `已保存 Bucket：${item.bucket} · 联通${verification.connected ? "正常" : "失败"} · 上传${verification.upload ? "可用" : "不可用"} · 下载${verification.download ? "可用" : "不可用"}`
+        : `已保存 Bucket：${item.bucket} · 尚未测试`
+      : "尚未配置";
     storageProviderConfigured[provider] = Boolean(item.configured);
   }
+  $("#existingStoragePrefix").value =
+    existingStorageProviderConfigs[$("#existingStorageProvider").value]?.prefix || "";
  $("#storagePrimary").value = c.primaryProvider || "r2";
  updateStoragePrimaryOptions();
  updateStorageUploadProviders(c.providers || {});
  const enabled = Object.values(c.providers || {}).filter(
     (item) => item.enabled && item.configured,
   ).length;
-  $("#s3Status").className = "pill " + (enabled ? "ready" : "warning");
-  $("#s3Status").textContent = enabled ? `已启用 ${enabled} 个` : "尚未配置";
-  setPageTitleAlert(enabled ? null : "注意：未配置");
+  const configured = Object.entries(c.providers || {}).filter(
+      ([, item]) => item.configured,
+    ),
+    labels = { r2: "R2", oss: "OSS" },
+    allVerified =
+      configured.length > 0 &&
+      configured.every(
+        ([, item]) =>
+          item.verification?.connected &&
+          item.verification?.upload &&
+          item.verification?.download,
+      );
+  $("#s3Status").className = "pill " + (allVerified ? "ready" : "warning");
+  $("#s3Status").textContent = configured.length
+    ? configured
+        .map(
+          ([id, item]) =>
+            `${labels[id] || id.toUpperCase()} 联通${item.verification?.connected ? "✓" : "✗"} 上传${item.verification?.upload ? "✓" : "✗"} 下载${item.verification?.download ? "✓" : "✗"}`,
+        )
+        .join(" · ")
+    : "尚未配置";
+  setPageTitleAlert(allVerified || !configured.length ? null : "存储权限异常");
   $("#s3Hint").textContent = enabled
     ? "两套配置都会下发，主存储负责首次数据同步。"
     : "尚未配置任何对象存储供应商，下方可随时填写并保存。";
@@ -4614,7 +4795,7 @@ $("#s3Form").onsubmit = async function (event) {
   event.preventDefault();
   const button =
     event.submitter || event.currentTarget.querySelector("button[type=submit]");
-  setButtonBusy(button, "保存中…");
+  setButtonBusy(button, "保存并测试中…");
   try {
     const providers = Object.fromEntries(
       Object.entries(storageProviderFields).map(([provider, fields]) => [
@@ -4639,7 +4820,7 @@ $("#s3Form").onsubmit = async function (event) {
       }),
     });
     await loadS3Config();
-    toast("对象存储设置已加密保存并立即生效");
+    toast("对象存储设置已保存，连通及上传下载权限已测试");
   } catch (error) {
     toast("保存失败：" + error.message);
   } finally {

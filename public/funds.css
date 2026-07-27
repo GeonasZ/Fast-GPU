@@ -237,6 +237,61 @@
   gap: 8px;
 }
 
+#providerKeyList {
+  display: grid;
+  gap: 9px;
+  margin-top: 16px;
+}
+
+#providerKeyList:empty {
+  display: none;
+}
+
+#providerKeyForm:not([hidden]) {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) auto;
+  align-items: end;
+  gap: 14px;
+  width: min(720px, 100%);
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid #cbd8d0;
+  border-radius: 8px;
+  background: #f7faf8;
+  box-shadow: 0 8px 22px rgba(24, 49, 38, 0.07);
+}
+
+#providerKeyForm label {
+  display: grid;
+  gap: 7px;
+  color: #34433b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+#providerKeyForm input {
+  min-height: 42px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #b9c9c0;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+  outline: none;
+}
+
+#providerKeyForm input:focus {
+  border-color: #24975a;
+  box-shadow: 0 0 0 3px rgba(36, 151, 90, 0.14);
+}
+
+#providerKeyForm > button {
+  min-height: 42px;
+  white-space: nowrap;
+}
+
 #launchKeyPortal {
   color: #17683d;
   border-color: #b8d9c5;
@@ -334,6 +389,19 @@
 }
 
 @media (max-width: 560px) {
+  .billing-viewport {
+    padding: 28px 16px;
+  }
+
+  .provider-portal-actions {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .provider-key-manager {
+    width: 100%;
+  }
+
   .provider-key-head {
     align-items: flex-start;
     flex-direction: column;
@@ -345,6 +413,29 @@
 
   .provider-key-head-actions button {
     flex: 1;
+  }
+
+  .provider-key-item {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .provider-key-item > div {
+    flex-wrap: wrap;
+  }
+
+  .provider-key-item small {
+    margin-left: 0;
+  }
+
+  #providerKeyForm:not([hidden]) {
+    grid-template-columns: 1fr;
+    padding: 15px;
+  }
+
+  #providerKeyForm > button {
+    width: 100%;
   }
 
   .tailscale-key-meta {
