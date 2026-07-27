@@ -14,7 +14,7 @@ const allInOne=!remoteUrl;
 const dataDirectory=path.join(__dirname,'.data');
 const keyFile=path.join(dataDirectory,'local-client.key');
 const localDatabase=path.join(dataDirectory,'local-fleet.sqlite');
-const controlName=`gpu-fleet-${createHash('sha256').update(__dirname).digest('hex').slice(0,16)}`;
+const controlName=`fast-gpu-${createHash('sha256').update(__dirname).digest('hex').slice(0,16)}`;
 const controlEndpoint=process.platform==='win32'
   ?`\\\\.\\pipe\\${controlName}`
   :path.join(dataDirectory,`${controlName}.sock`);
@@ -218,6 +218,32 @@ ipcMain.handle('dialog:pick-files',async event=>{
   if(!window)return [];
   const result=await dialog.showOpenDialog(window,{title:'选择要上传到对象存储的文件',properties:['openFile']});
   return result.canceled?[]:result.filePaths;
+});
+function storageFiles(root){
+  const files=[];
+  function walk(directory){
+    for(const entry of fs.readdirSync(directory,{withFileTypes:true})){
+      const fullPath=path.join(directory,entry.name);
+      if(entry.isDirectory())walk(fullPath);
+      else if(entry.isFile())files.push({localPath:fullPath,relativePath:path.relative(root,fullPath).replaceAll('\\','/'),size:fs.statSync(fullPath).size});
+    }
+  }
+  walk(root);
+  return files;
+}
+ipcMain.handle('dialog:pick-storage-files',async event=>{
+  const window=electronWindowFor(event);
+  if(!window)return [];
+  const result=await dialog.showOpenDialog(window,{title:'选择要上传到对象存储的文件',properties:['openFile','multiSelections']});
+  return result.canceled?[]:result.filePaths.map(localPath=>({name:path.basename(localPath),kind:'file',rootPath:path.dirname(localPath),files:[{localPath,relativePath:path.basename(localPath),size:fs.statSync(localPath).size}]}));
+});
+ipcMain.handle('dialog:pick-storage-folder',async event=>{
+  const window=electronWindowFor(event);
+  if(!window)return [];
+  const result=await dialog.showOpenDialog(window,{title:'选择要上传到对象存储的文件夹',properties:['openDirectory']});
+  if(result.canceled||!result.filePaths[0])return [];
+  const rootPath=result.filePaths[0];
+  return [{name:path.basename(rootPath),kind:'folder',rootPath,files:storageFiles(rootPath)}];
 });
 
 if(!app.requestSingleInstanceLock()){

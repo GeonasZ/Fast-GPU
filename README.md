@@ -100,7 +100,7 @@ Agent 每次执行预定义的 `nvidia-smi` 查询，返回每张 GPU 的：
 
 ### 性能测试报告
 
-`POST /benchmark` 在实例内部执行真实测试，生成 `/var/lib/gpu-fleet/benchmark.json`。网页可展示并导出完整 JSON，包括：
+`POST /benchmark` 在实例内部执行真实测试，生成 `/var/lib/fast-gpu/benchmark.json`。网页可展示并导出完整 JSON，包括：
 
 - 每张 GPU 的型号和 PCI Bus ID
 - PCIe 当前/最大 generation
@@ -170,7 +170,7 @@ S3-compatible bucket/prefix
 - API key 只保存在服务端，绝不放入浏览器代码。
 - 实例 Agent 使用 Bearer Token。
 - RunPod Agent 通过平台 HTTPS proxy 暴露。
-- Hyperstack VM 不分配 Public/Floating IP；SSH 仅通过 Tailscale 网络访问。
+- Hyperstack VM 创建时分配 Public/Floating IP，并通过所选 keypair 直接 SSH；生产环境应将 SSH 来源 CIDR 收紧到控制面出口 IP。
 - 不应向实例下发 S3 管理员凭据。
 
 ## 本地启动
@@ -274,7 +274,7 @@ $env:HYPERSTACK_ENVIRONMENT="..."
 $env:HYPERSTACK_KEY_NAME="..."
 $env:HYPERSTACK_IMAGE_NAME="Ubuntu 24.04 R580 with Docker"
 $env:HYPERSTACK_IMAGE_USER="ubuntu"
-$env:TAILSCALE_AUTH_KEY="..." # 仅由服务端 Secret Manager 注入
+$env:HYPERSTACK_AGENT_CIDR="0.0.0.0/0" # 建议生产环境改为控制面出口 IP/32
 
 npm start
 ```

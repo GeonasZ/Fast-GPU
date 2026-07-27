@@ -40,7 +40,7 @@ def bandwidth_status():
     executable = find_nvbandwidth()
     status = {"installed": executable is not None, "path": executable, "lastRun": None, "results": None}
     try:
-        with open("/var/lib/gpu-fleet/benchmark.json", encoding="utf-8") as report_file:
+        with open("/var/lib/fast-gpu/benchmark.json", encoding="utf-8") as report_file:
             report = json.load(report_file)
         status["lastRun"] = report.get("generatedAt")
         status["results"] = report.get("nvbandwidth")
@@ -72,7 +72,7 @@ def collect():
         gpus.append({"index": int(index), "name": name, "util": number(util), "memoryUsed": number(used), "memoryTotal": number(total), "temperature": number(temperature), "power": number(power)})
     runtime = {"status": "provisioning", "phase": "awaiting_bootstrap", "phaseLabel": "正在等待初始化脚本"}
     try:
-        with open("/var/lib/gpu-fleet/profile.json", encoding="utf-8") as profile:
+        with open("/var/lib/fast-gpu/profile.json", encoding="utf-8") as profile:
             runtime = json.load(profile)
     except (OSError, ValueError):
         pass

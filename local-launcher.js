@@ -4,7 +4,7 @@ const path=require('node:path');
 const {createHash}=require('node:crypto');
 
 const projectDirectory=__dirname;
-const controlName=`gpu-fleet-${createHash('sha256').update(projectDirectory).digest('hex').slice(0,16)}`;
+const controlName=`fast-gpu-${createHash('sha256').update(projectDirectory).digest('hex').slice(0,16)}`;
 const controlEndpoint=process.platform==='win32'
   ?`\\\\.\\pipe\\${controlName}`
   :path.join(projectDirectory,'.data',`${controlName}.sock`);

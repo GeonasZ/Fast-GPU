@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
-install -d -m 0755 /opt/gpu-fleet /var/lib/gpu-fleet /data/datasets/fineweb
+install -d -m 0755 /opt/fast-gpu /var/lib/fast-gpu /data/datasets/fineweb
 start_existing_agent() {
-  [[ -f /opt/gpu-fleet/agent.js ]] || return 0
+  [[ -f /opt/fast-gpu/agent.js ]] || return 0
   command -v node >/dev/null 2>&1 || return 0
-  pgrep -f '[n]ode /opt/gpu-fleet/agent.js' >/dev/null 2>&1 && return 0
-  nohup node /opt/gpu-fleet/agent.js >>/var/log/gpu-fleet-agent.log 2>&1 &
+  pgrep -f '[n]ode /opt/fast-gpu/agent.js' >/dev/null 2>&1 && return 0
+  nohup node /opt/fast-gpu/agent.js >>/var/log/fast-gpu-agent.log 2>&1 &
 }
 start_existing_agent
 profile() {
@@ -18,11 +18,11 @@ import json, os, sys, time
 status, phase, label = sys.argv[1:]
 current = {}
 try:
-    with open('/var/lib/gpu-fleet/profile.json', encoding='utf-8') as file:
+    with open('/var/lib/fast-gpu/profile.json', encoding='utf-8') as file:
         current = json.load(file)
 except (OSError, ValueError):
     pass
-with open('/var/lib/gpu-fleet/profile.json', 'w', encoding='utf-8') as file:
+with open('/var/lib/fast-gpu/profile.json', 'w', encoding='utf-8') as file:
     json.dump({'status': status, 'phase': phase, 'phaseLabel': label, 'warnings': current.get('warnings', []), 'updatedAt': int(time.time() * 1000)}, file)
 PY
 }
@@ -37,7 +37,7 @@ warning() {
   python3 - "$1" "$2" <<'PY'
 import json, sys, time
 component, reason = sys.argv[1:]
-path = '/var/lib/gpu-fleet/profile.json'
+path = '/var/lib/fast-gpu/profile.json'
 try:
     with open(path, encoding='utf-8') as file:
         profile = json.load(file)
@@ -72,8 +72,8 @@ NODE
 }
 start_ssh_early() {
   profile provisioning starting_ssh '正在启动 SSH 连接服务'
-  if [[ -x /opt/gpu-fleet/ensure-ssh.sh ]]; then
-    /opt/gpu-fleet/ensure-ssh.sh
+  if [[ -x /opt/fast-gpu/ensure-ssh.sh ]]; then
+    /opt/fast-gpu/ensure-ssh.sh
     return
   fi
   if [[ ! -x /usr/sbin/sshd ]]; then
@@ -91,7 +91,7 @@ start_ssh_early() {
     chmod 0600 "$home_dir/.ssh/authorized_keys"
   fi
   install -d -m 0755 /run/sshd /etc/ssh/sshd_config.d
-  cat > /etc/ssh/sshd_config.d/60-gpu-fleet.conf <<EOF
+  cat > /etc/ssh/sshd_config.d/60-fast-gpu.conf <<EOF
 Port ${FLEET_SSH_PORT:-22}
 PasswordAuthentication no
 KbdInteractiveAuthentication no
@@ -104,7 +104,7 @@ EOF
   pgrep -x sshd >/dev/null || /usr/sbin/sshd
   pgrep -x sshd >/dev/null
   timeout 5 ssh-keyscan -p "${FLEET_SSH_PORT:-22}" 127.0.0.1 >/dev/null 2>&1
-  printf '%s\n' bootstrap > /var/lib/gpu-fleet/ssh-autostart-mode
+  printf '%s\n' bootstrap > /var/lib/fast-gpu/ssh-autostart-mode
 }
 install_runtime_dependencies() {
   profile provisioning installing_runtime_dependencies '正在构建运行环境并安装平台依赖'
@@ -159,11 +159,33 @@ x = torch.ones(256, device='cuda')
 assert float((x * 2).sum()) == 512.0, 'PyTorch GPU calculation failed'
 print('torch', torch.__version__, 'cuda', torch.version.cuda, 'gpu', torch.cuda.get_device_name(0))
 PY
+run_configured_startup() {
+  local download_dir=/opt/fast-gpu/startup-downloads script_path=/opt/fast-gpu/startup-config.sh
+  if [[ -n "${FLEET_STARTUP_DOWNLOADS_B64:-}" ]]; then
+    profile provisioning startup_downloads '正在下载开机配置文件'
+    install -d -m 0755 "$download_dir"
+    python3 - "$download_dir" <<'PY'
+import base64, json, os, sys, urllib.parse, urllib.request
+target = sys.argv[1]
+items = json.loads(base64.b64decode(os.environ['FLEET_STARTUP_DOWNLOADS_B64']))
+for index, url in enumerate(items):
+    name = os.path.basename(urllib.parse.urlparse(url).path) or f'download-{index + 1}'
+    urllib.request.urlretrieve(url, os.path.join(target, name))
+PY
+  fi
+  if [[ -n "${FLEET_STARTUP_SCRIPT_B64:-}" ]]; then
+    profile provisioning startup_script '正在执行开机配置脚本'
+    printf '%s' "$FLEET_STARTUP_SCRIPT_B64" | base64 -d > "$script_path"
+    chmod 0700 "$script_path"
+    bash "$script_path"
+  fi
+}
+run_configured_startup
 profile provisioning starting_agent '正在启动监控 Agent'
 if [[ -n "${FLEET_AGENT_BUNDLE_URL:-}" ]]; then
-  curl -fsSL "$FLEET_AGENT_BUNDLE_URL" | tar -xz -C /opt/gpu-fleet
+  curl -fsSL "$FLEET_AGENT_BUNDLE_URL" | tar -xz -C /opt/fast-gpu
 elif [[ -n "${BASE_URL:-}" ]]; then
-  curl -fsSL "${BASE_URL%/}/provision/agent.js" -o /opt/gpu-fleet/agent.js
+  curl -fsSL "${BASE_URL%/}/provision/agent.js" -o /opt/fast-gpu/agent.js
 fi
 configure_storage_remote() {
   local name="$1" endpoint="$2" access_key="$3" secret_key="$4" region="${5:-}"
@@ -177,17 +199,9 @@ fi
 if [[ "${OSS_S3_ENABLED:-}" == 1 ]]; then
   configure_storage_remote oss "$OSS_S3_ENDPOINT" "$OSS_S3_ACCESS_KEY_ID" "$OSS_S3_SECRET_ACCESS_KEY" "${OSS_S3_REGION:-}"
 fi
-primary_storage="${STORAGE_PRIMARY_PROVIDER:-r2}"
-if [[ "$primary_storage" == r2 && "${R2_S3_ENABLED:-}" == 1 ]]; then
-  profile provisioning syncing_data '正在从 Cloudflare R2 同步数据'
-  rclone sync --checksum --transfers 16 "r2:${R2_S3_BUCKET}/${R2_S3_PREFIX:-fineweb-edu/CC-MAIN-2013-20}" /data/datasets/fineweb
-elif [[ "$primary_storage" == oss && "${OSS_S3_ENABLED:-}" == 1 ]]; then
-  profile provisioning syncing_data '正在从阿里云 OSS 同步数据'
-  rclone sync --checksum --transfers 16 "oss:${OSS_S3_BUCKET}/${OSS_S3_PREFIX:-fineweb-edu/CC-MAIN-2013-20}" /data/datasets/fineweb
-fi
 start_existing_agent
 trap - ERR
-if python3 -c "import json; raise SystemExit(not json.load(open('/var/lib/gpu-fleet/profile.json')).get('warnings'))"; then
+if python3 -c "import json; raise SystemExit(not json.load(open('/var/lib/fast-gpu/profile.json')).get('warnings'))"; then
   profile ready ready '初始化完成（有警告）'
 else
   profile ready ready '初始化完成'

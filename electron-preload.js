@@ -1,8 +1,10 @@
 const {contextBridge,ipcRenderer}=require('electron');
 
-contextBridge.exposeInMainWorld('gpuFleetWindow',{
+contextBridge.exposeInMainWorld('fastGpuWindow',{
   pickDirectory:()=>ipcRenderer.invoke('dialog:pick-directory'),
   pickFiles:()=>ipcRenderer.invoke('dialog:pick-files'),
+  pickStorageFiles:()=>ipcRenderer.invoke('dialog:pick-storage-files'),
+  pickStorageFolder:()=>ipcRenderer.invoke('dialog:pick-storage-folder'),
   minimize:()=>ipcRenderer.invoke('window:minimize'),
   toggleMaximize:()=>ipcRenderer.invoke('window:toggle-maximize'),
   close:()=>ipcRenderer.invoke('window:close'),

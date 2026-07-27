@@ -1,8 +1,11 @@
 require('./providers.test');
 require('./runtime-image.test');
+require('./image-profile.test');
 require('./credential-store.test');
 require('./billing-store.test');
 require('./auth-store.test');
 require('./terminal-shortcuts.test');
 require('./transfer-paths.test');
 require('./object-storage.test');
+require('./instance-actions.test');
+require('./electron-titlebar.test');

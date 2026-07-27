@@ -1,5 +1,5 @@
 {
-  "name": "gpu-fleet-console",
+  "name": "fast-gpu-console",
   "version": "1.0.0",
   "private": true,
   "scripts": {
@@ -9,7 +9,7 @@
     "start:all": "node local-launcher.js",
     "stop:all": "node local-launcher.js --stop",
     "test": "node test/all.test.js",
-    "check": "node --check server.js && node --check lib/auth-store.js && node --check agent/agent.js && node --check public/app.js && node --check public/reachability.js && node --check public/auth.js"
+    "check": "node --check server.js && node --check lib/auth-store.js && node --check lib/image-profile-store.js && node --check agent/agent.js && node --check public/app.js && node --check public/providers-page.js && node --check public/instances-page.js && node --check public/ssh-transfer.js && node --check public/storage-page.js && node --check public/ssh-transfer-actions.js && node --check public/terminal.js && node --check public/image-management.js && node --check public/bootstrap.js && node --check public/reachability.js && node --check public/auth.js"
   },
   "devDependencies": {
     "electron": "^43.2.0"

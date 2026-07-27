@@ -25,14 +25,14 @@ RUN apt-get update \
  && install /tmp/nvbandwidth/build/nvbandwidth /usr/local/bin/nvbandwidth \
  && rm -rf /tmp/nvbandwidth /root/.npm /var/lib/apt/lists/*
 
-RUN install -d -m 0755 /opt/gpu-fleet /var/lib/gpu-fleet /data/datasets/fineweb
-COPY agent/agent.js /opt/gpu-fleet/agent.js
-COPY agent/verify-image.sh /opt/gpu-fleet/verify-image.sh
-COPY agent/ensure-ssh.sh /opt/gpu-fleet/ensure-ssh.sh
-RUN chmod 0755 /opt/gpu-fleet/verify-image.sh /opt/gpu-fleet/ensure-ssh.sh
+RUN install -d -m 0755 /opt/fast-gpu /var/lib/fast-gpu /data/datasets/fineweb
+COPY agent/agent.js /opt/fast-gpu/agent.js
+COPY agent/verify-image.sh /opt/fast-gpu/verify-image.sh
+COPY agent/ensure-ssh.sh /opt/fast-gpu/ensure-ssh.sh
+RUN chmod 0755 /opt/fast-gpu/verify-image.sh /opt/fast-gpu/ensure-ssh.sh
 
 EXPOSE 22 3000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=6 \
   CMD curl -fsS http://127.0.0.1:3000/health || exit 1
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
-CMD ["node", "/opt/gpu-fleet/agent.js"]
+CMD ["node", "/opt/fast-gpu/agent.js"]

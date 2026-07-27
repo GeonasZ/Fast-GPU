@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
+const frontendSource = () => require('./frontend-source')(root);
 
 test('runtime image leaves fast-moving developer CLIs to instance bootstrap', () => {
   const dockerfile = read('Dockerfile.runtime');
@@ -16,27 +17,16 @@ test('runtime image leaves fast-moving developer CLIs to instance bootstrap', ()
   assert.match(bootstrap, /@anthropic-ai\/claude-code@latest/);
 });
 
-test('scheduled workflow only publishes and promotes the default runtime version', () => {
-  const workflow = read('.github/workflows/update-codex-runtime.yml');
-  const testAt = workflow.indexOf('Test candidate image');
-  const promoteAt = workflow.indexOf('Promote tested digest');
-  assert.ok(testAt > 0 && promoteAt > testAt);
-  assert.match(workflow, /RUNTIME_VERSION: "26\.03"/);
-  assert.doesNotMatch(workflow, /RUNTIME_VERSION: "26\.01"/);
-  assert.doesNotMatch(workflow, /RUNTIME_VERSION: "25\.12"/);
-  assert.match(workflow, /steps\.build\.outputs\.digest/);
-  assert.match(workflow, /--tag "\$\{image\}:stable-cuda13"/);
-});
-
 test('bootstrap installs dependencies for an on-demand image and checks the cloud GPU', () => {
   const bootstrap = read('agent/bootstrap.sh');
+  const dockerfile = read('Dockerfile.runtime');
   assert.match(bootstrap, /FLEET_PREBUILT_IMAGE:-0/);
   assert.match(bootstrap, /install_runtime_dependencies/);
   assert.match(bootstrap, /profile failed failed/);
   assert.match(bootstrap, /installing_runtime_dependencies/);
   assert.match(bootstrap, /rclone rsync/);
   assert.match(bootstrap, /npm install -g/);
-  assert.doesNotMatch(bootstrap, /FLEET_VERIFY_GPU=1 \/opt\/gpu-fleet\/verify-image\.sh/);
+  assert.doesNotMatch(bootstrap, /FLEET_VERIFY_GPU=1 \/opt\/fast-gpu\/verify-image\.sh/);
   assert.match(bootstrap, /command -v nvidia-smi/);
   assert.match(bootstrap, /nvidia-smi >\/dev\/null/);
   assert.match(bootstrap, /torch\.cuda\.is_available/);
@@ -62,6 +52,34 @@ test('runtime repository derives all supported prebuilt image tags', () => {
   assert.equal(images[2].buildMode, 'prebuilt');
 });
 
+test('default runtime catalog exposes exactly three presets', () => {
+  const {runtimeImages} = require('../lib/runtime-images');
+  const images = runtimeImages({});
+  assert.equal(images.length, 3);
+  assert.deepEqual(images.map(image => image.id), [
+    'pytorch-2.11-cuda13.2',
+    'pytorch-2.10-cuda13.1',
+    'pytorch-2.7-cuda12.8',
+  ]);
+});
+
+test('custom Docker image references are validated separately from presets', () => {
+  const {resolveCustomRuntimeImage} = require('../lib/runtime-images');
+  const image = resolveCustomRuntimeImage('ghcr.io/example/training:latest', 13);
+  assert.equal(image.image, 'ghcr.io/example/training:latest');
+  assert.equal(image.buildMode, 'custom');
+  assert.equal(image.cudaMajor, 13);
+  assert.equal(resolveCustomRuntimeImage('ubuntu:24.04', 12).image, 'ubuntu:24.04');
+  assert.throws(
+    () => resolveCustomRuntimeImage('https://ghcr.io/example/training:latest', 13),
+    error => error.code === 'invalid_custom_image',
+  );
+  assert.throws(
+    () => resolveCustomRuntimeImage('ghcr.io/example/training:latest', 11),
+    error => error.code === 'invalid_custom_image_cuda',
+  );
+});
+
 test('default catalog distinguishes published platform images from startup-configured NGC images', () => {
   const {runtimeImages, resolveRuntimeImage} = require('../lib/runtime-images');
   const images = runtimeImages({});
@@ -73,28 +91,26 @@ test('default catalog distinguishes published platform images from startup-confi
       {image: 'ghcr.io/geonasz/gpu-scheduling-platform-runtime:pytorch-2.7-cuda12.8-ngc25.03', buildMode: 'prebuilt'},
     ],
   );
-  assert.deepEqual(images.slice(3).map(item => item.buildMode), ['on-demand', 'on-demand']);
-  assert.ok(images.slice(3).every(item => item.buildModeLabel.includes('开机安装')));
   assert.ok(images.every(item => !item.buildModeLabel.includes('临时')));
-  assert.deepEqual(images[0].availableBuildModes, ['prebuilt', 'on-demand']);
+  assert.ok(images.every(item =>
+    JSON.stringify(item.availableBuildModes) === JSON.stringify(['prebuilt', 'on-demand'])
+  ));
   assert.equal(
     resolveRuntimeImage(images[0].id, {}, 'on-demand').image,
     'nvcr.io/nvidia/pytorch:26.03-py3',
   );
-  assert.throws(
-    () => resolveRuntimeImage(images[3].id, {}, 'prebuilt'),
-    error => error.code === 'invalid_image_build_mode',
-  );
 });
 
-test('launch UI submits a separately selected image acquisition mode', () => {
-  const app = read('public/app.js');
+test('launch UI submits a persisted image startup profile', () => {
+  const app = frontendSource();
   const html = read('public/index.html');
   const server = read('server.js');
   assert.match(html, /id="imageBuildMode"/);
-  assert.match(app, /image\.availableBuildModes/);
-  assert.match(app, /imageBuildMode:\s*selected\.provider/);
-  assert.match(server, /resolveRuntimeImage\(\s*d\.imageVersion,\s*process\.env,\s*d\.imageBuildMode/);
+  assert.match(app, /request\("\/api\/image-profiles"\)/);
+  assert.match(app, /imageProfileId:\s*selected\.provider/);
+  assert.match(server, /imageProfileStore\.get\(d\.imageProfileId\)/);
+  assert.match(app, /startupScriptFile/);
+  assert.match(app, /loadPresetStartupScript/);
 });
 
 test('candidate image verification checks npm but not fast-moving CLIs', () => {
@@ -127,7 +143,7 @@ test('runtime installs SSH and verifies startup with init-system fallbacks', () 
   assert.match(bootstrap, /PermitRootLogin prohibit-password/);
   assert.match(ssh, /PermitRootLogin prohibit-password/);
   assert.match(hyperstack, /PermitRootLogin no/);
-  assert.match(hyperstack, /tailscale up --auth-key="file:/);
+  assert.doesNotMatch(hyperstack, /tailscale/i);
   assert.doesNotMatch(hyperstack, /set -x/);
 });
 
@@ -192,7 +208,7 @@ test('telemetry uses persistent per-instance credentials instead of a global tok
 
 test('managed SSH remains available when agent telemetry is unavailable', () => {
   const server = read('server.js');
-  const app = read('public/app.js');
+  const app = frontendSource();
   assert.doesNotMatch(server, /requireDeveloperTools/);
   assert.match(app, /SSH \/ 文件/);
   assert.match(app, /accessible\s*=\s*Boolean\(instance\.sshReady\)/);
@@ -239,7 +255,7 @@ test('managed SSH remains available when agent telemetry is unavailable', () => 
   assert.match(server, /includeUnregistered:\s*true/);
   assert.match(server, /synchronizingRunningInstances/);
   assert.match(app, /读取 BASE_URL 更新状态失败/);
-  assert.match(server, /\/opt\/gpu-fleet\/bootstrap\.sh/);
+  assert.match(server, /\/opt\/fast-gpu\/bootstrap\.sh/);
   assert.match(server, /runCommand\(["']scp["']/);
   assert.match(server, /copyFileSync\(path\.join\(__dirname,\s*["']agent["'],\s*["']bootstrap\.sh["']/);
   const revokeIndex=server.search(/revokeAgent\(\s*previousCredential\.agent_id/);
@@ -257,7 +273,7 @@ test('managed SSH remains available when agent telemetry is unavailable', () => 
 
 test('running container instances receive bootstrap over SSH when telemetry is absent', () => {
   const server = read('server.js');
-  const app = read('public/app.js');
+  const app = frontendSource();
   assert.doesNotMatch(server, /instance\.provider\s*===\s*["']autodl["']/);
   assert.match(server, /instance\.provider\s*!==\s*["']hyperstack["']/);
   assert.match(server, /ssh_bootstrap_injection_failed/);
@@ -270,7 +286,7 @@ test('running container instances receive bootstrap over SSH when telemetry is a
 
 test('provider running state stays green while platform initialization remains visible', () => {
   const server = read('server.js');
-  const app = read('public/app.js');
+  const app = frontendSource();
   assert.match(server, /providerState:\s*x\.status/);
   assert.match(app, /i\.providerState\s*===\s*["']running["']/);
   assert.match(app, /供应商运行中/);
@@ -282,7 +298,7 @@ test('provider running state stays green while platform initialization remains v
   assert.match(app, /远端 SSH 尚未就绪，正在等待 SSH 与遥测连接恢复/);
   assert.match(app, /connectionRecoveryLabel = instanceConnectionRecoveryLabel\(i\)/);
   assert.match(app, /const sshMarkup = instance\.sshDiagnostic\?\.message/);
-  assert.match(app, /i\.lifecycleAction\s*===\s*["']delete["'][\s\S]*["']terminating["']/);
+  assert.match(app, /action\s*===\s*["']delete["']\) return ["']terminating["']/);
   assert.match(app, /右上角状态必须一直使用红色 terminating/);
   assert.match(app, /canStart\s*=\s*\["stopped",\s*"stopping"\]\.includes\(visualStatus\)/);
   assert.match(app, /initializationMarkup\s*=\s*\["stopped",\s*"stopping",\s*"terminating"\]\.includes\(\s*visualStatus/);
@@ -307,7 +323,7 @@ test('provider-side deletion and startup reconciliation purge stale instance art
 
 test('existing instance adoption persists only after the generated key connects', () => {
   const server = read('server.js');
-  const app = read('public/app.js');
+  const app = frontendSource();
   assert.match(server, /pendingInstanceAdoptions/);
   assert.ok(server.includes('\\/adoption\\/prepare'));
   assert.ok(server.includes('\\/adoption\\/verify'));
@@ -319,10 +335,10 @@ test('existing instance adoption persists only after the generated key connects'
   assert.match(app, /method === "password"/);
 });
 
-test('instance lifecycle decorator does not retrigger its MutationObserver forever', () => {
-  const app = read('public/app.js');
-  assert.match(app, /pill\.textContent\s*!==/);
-  assert.match(app, /instance\.lifecycleAction\s*!==\s*["']start["']/);
+test('SSH decoration does not rewrite the instance lifecycle status', () => {
+  const app = frontendSource();
+  assert.doesNotMatch(app, /applyInstanceLifecycleLabels/);
+  assert.match(app, /function instanceVisualStatus\(/);
   const server = read('server.js');
   assert.match(server, /recentlyCreated\s*=/);
   assert.match(server, /20\s*\*\s*60\s*\*\s*1000/);
@@ -333,7 +349,7 @@ test('instance lifecycle decorator does not retrigger its MutationObserver forev
 });
 
 test('Hyperstack SSH CIDR defaults to all IPv4 sources for portable direct access', () => {
-  const app = read('public/app.js');
+  const app = frontendSource();
   assert.match(app, /input\.value\s*=\s*["']0\.0\.0\.0\/0["']/);
   assert.match(app, /SSH 来源 CIDR/);
 });

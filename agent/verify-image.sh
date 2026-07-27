@@ -6,7 +6,7 @@ for tool in "${required[@]}"; do
   command -v "$tool" >/dev/null || { echo "missing required tool: $tool" >&2; exit 1; }
 done
 
-node --check /opt/gpu-fleet/agent.js
+node --check /opt/fast-gpu/agent.js
 fio --version
 rclone version | head -1
 nvcc --version | tail -1

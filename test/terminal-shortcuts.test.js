@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+const app = require('./frontend-source')(path.join(__dirname, '..'));
 
 test('SSH terminal exposes configurable clipboard and editing shortcuts', () => {
   assert.match(app, /id="showTerminalShortcuts"/);
@@ -17,7 +17,7 @@ test('SSH terminal exposes configurable clipboard and editing shortcuts', () => 
 });
 
 test('SSH terminal guards multiline paste and supports context actions', () => {
-  assert.match(app, /lineCount\s*>\s*1\s*&&\s*!confirm/);
+  assert.match(app, /lineCount\s*>\s*1[\s\S]*await confirmAction/);
   assert.match(app, /addEventListener\(\s*["']contextmenu["']/);
   assert.match(app, /data-terminal-copy/);
   assert.match(app, /data-terminal-paste/);

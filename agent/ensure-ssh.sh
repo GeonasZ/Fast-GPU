@@ -9,8 +9,8 @@ if ! command -v sshd >/dev/null 2>&1; then
   apt-get install -y --no-install-recommends openssh-server
 fi
 
-install -d -m 0755 /run/sshd /etc/ssh/sshd_config.d /var/lib/gpu-fleet
-cat > /etc/ssh/sshd_config.d/60-gpu-fleet.conf <<EOF
+install -d -m 0755 /run/sshd /etc/ssh/sshd_config.d /var/lib/fast-gpu
+cat > /etc/ssh/sshd_config.d/60-fast-gpu.conf <<EOF
 Port ${ssh_port}
 PasswordAuthentication no
 KbdInteractiveAuthentication no
@@ -53,7 +53,7 @@ fi
 # Container providers rerun bootstrap.sh on each container start, which is the
 # persistence mechanism when there is no init system inside the image.
 [[ "$autostart_mode" == direct ]] && autostart_mode=bootstrap
-printf '%s\n' "$autostart_mode" > /var/lib/gpu-fleet/ssh-autostart-mode
+printf '%s\n' "$autostart_mode" > /var/lib/fast-gpu/ssh-autostart-mode
 
 pgrep -x sshd >/dev/null
 if command -v ss >/dev/null 2>&1; then

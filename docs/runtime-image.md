@@ -11,9 +11,9 @@ because registry throughput varies significantly by provider and region.
 
 ## Published prebuilt images
 
-`.github/workflows/update-codex-runtime.yml` builds `Dockerfile.runtime` from the
-default NGC image, tests the exact candidate digest, and only then promotes the
-default release. The catalog also contains the two manually published tags:
+The repository does not automatically build or publish runtime images.
+Published tags are maintained through the manual process below, and the catalog
+contains these tags:
 
 ```text
 ghcr.io/<owner>/<repository>-runtime:pytorch-2.11-cuda13.2-ngc26.03

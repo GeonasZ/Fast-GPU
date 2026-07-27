@@ -1,4 +1,4 @@
-﻿const http = require("node:http");
+const http = require("node:http");
 const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -23,7 +23,11 @@ const {
   resolveCuda13Image,
   publicControlPlaneError,
 } = require("./lib/provisioning");
-const { runtimeImages, resolveRuntimeImage } = require("./lib/runtime-images");
+const {
+  runtimeImages,
+  resolveRuntimeImage,
+  resolveCustomRuntimeImage,
+} = require("./lib/runtime-images");
 const { isStaleInventoryError } = require("./lib/inventory");
 const {
   createAutoDLImageImportManager,
@@ -35,6 +39,7 @@ const {
   applicationToolsDirectory,
 } = require("./lib/local-tools");
 const { createAuthStore } = require("./lib/auth-store");
+const { createImageProfileStore } = require("./lib/image-profile-store");
 const CLIENT_MODE = process.env.FLEET_CLIENT_MODE === "local" ? "local" : "web";
 const HOST =
   process.env.HOST || (CLIENT_MODE === "local" ? "127.0.0.1" : "0.0.0.0");
@@ -180,7 +185,7 @@ print(json.dumps({"generatedAt":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()
 `;
   const remote = `printf '%s' '${Buffer.from(source).toString("base64")}' | base64 -d | python3`;
   const token = randomBytes(12).toString("hex"),
-    keyFile = path.join(os.tmpdir(), `gpu-fleet-reachability-${token}.pem`);
+    keyFile = path.join(os.tmpdir(), `fast-gpu-reachability-${token}.pem`);
   try {
     fs.writeFileSync(keyFile, openSshPrivateKey(managed.privateKey), {
       mode: 0o600,
@@ -286,7 +291,9 @@ const providerDefinitions = {
 const credentialStore = createCredentialStore(process.env),
   providerKeyStore = createProviderKeyStore(process.env),
   billingStore = createBillingStore(process.env),
+  imageProfileStore = createImageProfileStore(process.env),
   authStore = createAuthStore(process.env);
+providerKeyStore.remove("__tailscale_auth_key__");
 const savedControlPlaneConfig = providerKeyStore.get(
   "__control_plane_config__",
 );
@@ -339,7 +346,9 @@ function applyStorageConfig(config) {
           ? values.enabled
             ? "1"
             : ""
-          : String(values[field] || "");
+          : field === "prefix"
+            ? ""
+            : String(values[field] || "");
       if (value) process.env[key] = value;
       else delete process.env[key];
     }
@@ -365,7 +374,7 @@ function storageProviderConfig(providerId, requireEnabled = true) {
     accessKeyId: process.env[keys.accessKeyId],
     secretAccessKey: process.env[keys.secretAccessKey],
     bucket,
-    prefix: process.env[keys.prefix] || "",
+    prefix: "",
   };
 }
 // In-flight multipart uploads. The authoritative resume state lives on R2
@@ -431,9 +440,6 @@ if (savedHyperstackConfig) {
     console.error("读取 Hyperstack 配置失败", error.message);
   }
 }
-const savedTailscaleAuthKey = providerKeyStore.get("__tailscale_auth_key__");
-if (savedTailscaleAuthKey)
-  process.env.TAILSCALE_AUTH_KEY = savedTailscaleAuthKey;
 for (const [id, definition] of Object.entries(providerDefinitions)) {
   const saved = providerKeyStore.get(id);
   if (saved) {
@@ -454,7 +460,7 @@ for (const [providerId, adapter] of Object.entries(providers)) {
   adapter.create = async (options) => {
     const credential = agentCredentials.create(
       providerId,
-      options.name || "gpu-fleet",
+      options.name || "fast-gpu",
     );
     try {
       const isolated = adapters({
@@ -502,6 +508,8 @@ for (const [providerId, adapter] of Object.entries(providers)) {
 const autodlImageImports = createAutoDLImageImportManager(providers.autodl);
 const agentTargets = new Map(),
   hyperstackProvisioning = new Map(),
+  instanceLaunchProfiles = new Map(),
+  providerAuthIssues = new Map(),
   instanceRuntime = new Map(),
   baseUrlUpdates = new Map(),
   pushedTelemetry = new Map(),
@@ -518,6 +526,36 @@ const agentTargets = new Map(),
   persistedTelemetryThisRun = new Set(),
   sshReadiness = new Map(),
   inventoryMissingObservations = new Map();
+function providerIdForError(error) {
+  if (!error?.provider) return "";
+  return (
+    Object.entries(providers).find(([, adapter]) => adapter.name === error.provider)?.[0] ||
+    ""
+  );
+}
+function markProviderAuthIssue(providerId) {
+  const status = providerKeyStore.status(providerId),
+    active = status.keys?.find((key) => key.active);
+  if (!active) return;
+  providerAuthIssues.set(providerId, {
+    source: "api",
+    keyId: active.id,
+    keyLabel: active.label || "未命名 Key",
+    keySuffix: active.keySuffix || "",
+    detectedAt: new Date().toISOString(),
+    message: "授权已过期或失效",
+  });
+}
+function observeProviderResult(providerId, error) {
+  if (Number(error?.status) === 401) markProviderAuthIssue(providerId);
+  else if (!error) providerAuthIssues.delete(providerId);
+}
+function providerAuthErrorMessage(providerId, fallback) {
+  const issue = providerAuthIssues.get(providerId);
+  return issue
+    ? `${issue.keyLabel}（末四位 ${issue.keySuffix || "未知"}）授权已过期或失效`
+    : fallback;
+}
 const platformStartedAt = Date.now(),
   telemetryRecoveryStartupGraceMs = Math.max(
     0,
@@ -1194,7 +1232,7 @@ function scheduleSshReadinessProbe(providerId, id, runtime) {
       if (!managed) throw Error("SSH 公网入口尚未分配");
       keyFile = path.join(
         os.tmpdir(),
-        `gpu-fleet-readiness-${randomBytes(12).toString("hex")}.pem`,
+        `fast-gpu-readiness-${randomBytes(12).toString("hex")}.pem`,
       );
       fs.writeFileSync(keyFile, openSshPrivateKey(managed.privateKey), {
         mode: 0o600,
@@ -1250,7 +1288,7 @@ async function managedSshConnection(providerId, id) {
     });
   const record = sshStore.update(providerId, id, { host, externalPort: port });
   const identityFile =
-    `gpu-fleet-${providerId}-${id}`.replace(/[^a-z0-9._-]/gi, "_") + ".pem";
+    `fast-gpu-${providerId}-${id}`.replace(/[^a-z0-9._-]/gi, "_") + ".pem";
   return {
     ...record,
     host,
@@ -1428,7 +1466,7 @@ function adoptionInstallCommand(publicKey) {
 }
 async function sshWithPrivateKey({ host, port, username, privateKey, remote }) {
   const token = randomBytes(12).toString("hex"),
-    keyFile = path.join(os.tmpdir(), `gpu-fleet-adopt-${token}.pem`);
+    keyFile = path.join(os.tmpdir(), `fast-gpu-adopt-${token}.pem`);
   try {
     fs.writeFileSync(keyFile, openSshPrivateKey(privateKey), { mode: 0o600 });
     securePrivateKeyFile(keyFile);
@@ -1527,13 +1565,13 @@ async function reinjectTelemetryAgent(providerId, id, { recoveryOnly = false } =
   const previousCredential = agentCredentials.findByInstance(providerId, id);
   const credential = agentCredentials.create(
     providerId,
-    instance.name || "gpu-fleet",
+    instance.name || "fast-gpu",
   );
   const managed = await waitForManagedSsh(providerId, id),
     token = randomBytes(12).toString("hex"),
-    keyFile = path.join(os.tmpdir(), `gpu-fleet-agent-${token}.pem`),
-    transferDir = path.join(os.tmpdir(), `gpu-fleet-bootstrap-${token}`),
-    remoteDir = `/tmp/gpu-fleet-bootstrap-${token}`;
+    keyFile = path.join(os.tmpdir(), `fast-gpu-agent-${token}.pem`),
+    transferDir = path.join(os.tmpdir(), `fast-gpu-bootstrap-${token}`),
+    remoteDir = `/tmp/fast-gpu-bootstrap-${token}`;
   // The active credential index is unique per provider instance. Revoke the
   // stale credential before binding its replacement after a platform restart.
   if (previousCredential?.agent_id)
@@ -1543,13 +1581,19 @@ async function reinjectTelemetryAgent(providerId, id, { recoveryOnly = false } =
     FLEET_AGENT_ID: credential.agentId,
     FLEET_AGENT_SECRET: credential.secret,
     FLEET_PROVIDER: providerId,
-    FLEET_INSTANCE_NAME: instance.name || "gpu-fleet",
+    FLEET_INSTANCE_NAME: instance.name || "fast-gpu",
     FLEET_SSH_PORT: String(
       managed.internalPort || process.env.FLEET_SSH_PORT || 22022,
     ),
     FLEET_SSH_PUBLIC_KEY: managed.publicKey,
     FLEET_SSH_USER: managed.username,
   };
+  const launchProfile = instanceLaunchProfiles.get(`${providerId}:${id}`);
+  if (launchProfile && !recoveryOnly) {
+    values.FLEET_EXPECTED_CUDA_MAJOR = String(launchProfile.cudaMajor);
+    values.FLEET_STARTUP_SCRIPT_B64 = Buffer.from(launchProfile.startupScript, "utf8").toString("base64");
+    values.FLEET_STARTUP_DOWNLOADS_B64 = Buffer.from(JSON.stringify(launchProfile.downloads), "utf8").toString("base64");
+  }
   if (recoveryOnly) values.FLEET_RECOVERY_ONLY = "1";
   if (telemetryMode === "named-tunnel" && process.env.BASE_URL) {
     values.BASE_URL = String(process.env.BASE_URL).replace(/\/+$/, "");
@@ -1583,7 +1627,7 @@ async function reinjectTelemetryAgent(providerId, id, { recoveryOnly = false } =
       .map(([key, value]) => `${key}=${JSON.stringify(String(value))}`)
       .join("\n") + "\n";
   const privilege = managed.username === "root" ? "" : "sudo -n ",
-    remote = `${privilege}install -d -m 0755 /opt/gpu-fleet /var/lib/gpu-fleet; ${privilege}install -m 0755 ${remoteDir}/bootstrap.sh /opt/gpu-fleet/bootstrap.sh; ${privilege}install -m 0644 ${remoteDir}/agent.js /opt/gpu-fleet/agent.js; ${privilege}install -m 0600 ${remoteDir}/agent.env /opt/gpu-fleet/agent.env; ${privilege}bash -lc 'pkill -f "[n]ode /opt/gpu-fleet/agent.js" || true; set -a; source /opt/gpu-fleet/agent.env; set +a; nohup bash /opt/gpu-fleet/bootstrap.sh >>/var/log/gpu-fleet-bootstrap.log 2>&1 &'`;
+    remote = `${privilege}install -d -m 0755 /opt/fast-gpu /var/lib/fast-gpu; ${privilege}install -m 0755 ${remoteDir}/bootstrap.sh /opt/fast-gpu/bootstrap.sh; ${privilege}install -m 0644 ${remoteDir}/agent.js /opt/fast-gpu/agent.js; ${privilege}install -m 0600 ${remoteDir}/agent.env /opt/fast-gpu/agent.env; ${privilege}bash -lc 'pkill -f "[n]ode /opt/fast-gpu/agent.js" || true; set -a; source /opt/fast-gpu/agent.env; set +a; nohup bash /opt/fast-gpu/bootstrap.sh >>/var/log/fast-gpu-bootstrap.log 2>&1 &'`;
   try {
     fs.mkdirSync(transferDir, { recursive: true });
     fs.copyFileSync(path.join(__dirname, "agent", "bootstrap.sh"), path.join(transferDir, "bootstrap.sh"));
@@ -1671,7 +1715,7 @@ async function reinjectTelemetryAgent(providerId, id, { recoveryOnly = false } =
       `${managed.username}@${managed.host}`,
       remote,
     ]);
-    const key = `${providerId}:${instance.name || "gpu-fleet"}`;
+    const key = `${providerId}:${instance.name || "fast-gpu"}`;
     instanceTelemetryKeys.set(String(id), key);
     telemetryDiagnostics.set(key, {
       state: "waiting",
@@ -1772,7 +1816,7 @@ function openSshPrivateKey(privateKey) {
     sshString(type),
     sshString(publicKey),
     sshString(Buffer.concat([seed, publicKey])),
-    sshString("gpu-fleet-managed"),
+    sshString("fast-gpu-managed"),
   ]);
   const paddingLength = 8 - (privateBlob.length % 8);
   privateBlob = Buffer.concat([
@@ -1797,7 +1841,7 @@ const sshTelemetrySource = `import json, subprocess, time
 while True:
     runtime={"status":"ready","phase":"ssh_telemetry","phaseLabel":"SSH 长连接遥测"}
     try:
-        with open("/var/lib/gpu-fleet/profile.json", encoding="utf-8") as profile:
+        with open("/var/lib/fast-gpu/profile.json", encoding="utf-8") as profile:
             runtime=json.load(profile)
     except (OSError, ValueError):
         pass
@@ -1842,7 +1886,7 @@ async function startSshTelemetry(providerId, id) {
     if (!sshExecutable) throw Error("本机未安装 OpenSSH");
     session.keyFile = path.join(
       os.tmpdir(),
-      `gpu-fleet-telemetry-${randomBytes(12).toString("hex")}.pem`,
+      `fast-gpu-telemetry-${randomBytes(12).toString("hex")}.pem`,
     );
     fs.writeFileSync(session.keyFile, openSshPrivateKey(managed.privateKey), {
       mode: 0o600,
@@ -1988,6 +2032,265 @@ function provider(name) {
   if (!p) throw Object.assign(Error("未知供应商"), { status: 400 });
   return p;
 }
+let hyperstackMetadataPromise;
+function hyperstackKeypairPolicies() {
+  try {
+    return JSON.parse(
+      providerKeyStore.get("__hyperstack_keypair_policies__") || "{}",
+    );
+  } catch {
+    return {};
+  }
+}
+function saveHyperstackKeypairPolicies(policies) {
+  providerKeyStore.set(
+    "__hyperstack_keypair_policies__",
+    JSON.stringify(policies),
+  );
+}
+function managedHyperstackKeypair(id, name = "") {
+  const direct = sshStore.get("hyperstack", `keypair:${id}`);
+  if (direct || !name) return direct;
+  const legacy = sshStore.get("hyperstack", `keypair:${name}`);
+  if (!legacy) return null;
+  if (String(id) !== String(name))
+    sshStore.save(`keypair:${id}`, {
+      provider: "hyperstack",
+      privateKey: legacy.privateKey,
+      publicKey: legacy.publicKey,
+      internalPort: legacy.internalPort || sshStore.port,
+      username: legacy.username || "ubuntu",
+    });
+  return legacy;
+}
+async function managedHyperstackResources() {
+  const resources = await providers.hyperstack.configurationResources(),
+    policies = hyperstackKeypairPolicies();
+  return {
+    ...resources,
+    keypairs: resources.keypairs.map((keypair) => ({
+      ...keypair,
+      platformManaged: Boolean(
+        managedHyperstackKeypair(keypair.id, keypair.name),
+      ),
+      registrationPolicy: policies[String(keypair.id)] || {
+        mode: "on-demand",
+        environments: [],
+      },
+    })),
+  };
+}
+async function registerManagedHyperstackKeypair(
+  sourceKeypair,
+  environmentName,
+  resources,
+) {
+  const credential = managedHyperstackKeypair(
+    sourceKeypair.id,
+    sourceKeypair.name,
+  );
+  if (!credential)
+    throw Object.assign(Error("该 SSH Keypair 不是平台管理的，无法复制"), {
+      status: 409,
+      code: "hyperstack_keypair_not_managed",
+    });
+  const existing = resources.keypairs.find(
+    (item) =>
+      item.environmentName === environmentName &&
+      sourceKeypair.fingerprint &&
+      item.fingerprint === sourceKeypair.fingerprint,
+  );
+  if (existing) return existing;
+  const nameConflict = resources.keypairs.find(
+    (item) =>
+      item.environmentName === environmentName && item.name === sourceKeypair.name,
+  );
+  if (nameConflict)
+    throw Object.assign(
+      Error(`${environmentName} 中已有同名但不同的 Keypair`),
+      { status: 409, code: "hyperstack_keypair_name_conflict" },
+    );
+  const created = await providers.hyperstack.importKeypair({
+    name: sourceKeypair.name,
+    environmentName,
+    publicKey: credential.publicKey,
+  });
+  const replica = {
+    id: created.id,
+    name: created.name || sourceKeypair.name,
+    environmentName: created.environment?.name || environmentName,
+    region:
+      created.environment?.region ||
+      resources.environments.find((item) => item.name === environmentName)
+        ?.region,
+    fingerprint: created.fingerprint || sourceKeypair.fingerprint,
+  };
+  sshStore.save(`keypair:${replica.id}`, {
+    provider: "hyperstack",
+    privateKey: credential.privateKey,
+    publicKey: credential.publicKey,
+    internalPort: sshStore.port,
+    username: credential.username || "ubuntu",
+  });
+  resources.keypairs.push(replica);
+  return replica;
+}
+async function ensureHyperstackRegionMetadata(force = false) {
+  const environmentName = process.env.HYPERSTACK_ENVIRONMENT,
+    keyName = process.env.HYPERSTACK_KEY_NAME;
+  if (!providers.hyperstack.token || !environmentName || !keyName) return null;
+  if (
+    !force &&
+    process.env.HYPERSTACK_REGION &&
+    process.env.HYPERSTACK_KEYPAIR_ID
+  )
+    return { region: process.env.HYPERSTACK_REGION, environmentName, keyName };
+  if (hyperstackMetadataPromise) return hyperstackMetadataPromise;
+  hyperstackMetadataPromise = (async () => {
+    const resources = await managedHyperstackResources(),
+      environment = resources.environments.find(
+        (item) => item.name === environmentName,
+      ),
+      keypair = resources.keypairs.find(
+        (item) =>
+          String(item.id) === String(process.env.HYPERSTACK_KEYPAIR_ID || "") ||
+          (item.name === keyName && item.environmentName === environmentName),
+      );
+    if (!environment)
+      throw Object.assign(
+        Error(`Hyperstack Environment ${environmentName} 不存在`),
+        { status: 409, code: "hyperstack_environment_missing" },
+      );
+    if (!keypair)
+      throw Object.assign(Error(`Hyperstack Keypair ${keyName} 不存在`), {
+        status: 409,
+        code: "hyperstack_keypair_missing",
+      });
+    if (keypair.environmentName !== environmentName)
+      throw Object.assign(
+        Error(
+          `Keypair ${keyName} 属于 ${keypair.environmentName || "未知 Environment"}，不属于 ${environmentName}`,
+        ),
+        { status: 409, code: "hyperstack_keypair_environment_mismatch" },
+      );
+    const region = keypair.region || environment.region;
+    if (!region)
+      throw Object.assign(Error("无法确认 Hyperstack Keypair 所属区域"), {
+        status: 409,
+        code: "hyperstack_keypair_region_unknown",
+      });
+    let saved = {};
+    try {
+      saved = JSON.parse(providerKeyStore.get("__hyperstack_config__") || "{}");
+    } catch {}
+    const metadata = {
+      HYPERSTACK_REGION: region,
+      HYPERSTACK_KEYPAIR_ENVIRONMENT: environmentName,
+      HYPERSTACK_KEYPAIR_ID: String(keypair.id),
+      },
+      values = { ...saved, ...metadata };
+    providerKeyStore.set("__hyperstack_config__", JSON.stringify(values));
+    Object.assign(process.env, metadata);
+    Object.assign(providers.hyperstack.env, metadata);
+    return { region, environmentName, keyName };
+  })().finally(() => {
+    hyperstackMetadataPromise = null;
+  });
+  return hyperstackMetadataPromise;
+}
+async function prepareHyperstackOfferRegions() {
+  if (!providers.hyperstack.token || !process.env.HYPERSTACK_KEY_NAME) return;
+  const resources = await managedHyperstackResources(),
+    source = resources.keypairs.find(
+      (item) =>
+        String(item.id) === String(process.env.HYPERSTACK_KEYPAIR_ID || "") ||
+        (item.name === process.env.HYPERSTACK_KEY_NAME &&
+          item.environmentName === process.env.HYPERSTACK_ENVIRONMENT),
+    );
+  if (!source) return;
+  const policy = source.registrationPolicy || {
+      mode: "on-demand",
+      environments: [],
+    },
+    allowedEnvironments =
+      policy.mode === "selected"
+        ? new Set([
+            source.environmentName,
+            ...(policy.environments || []),
+          ])
+        : new Set(resources.environments.map((item) => item.name)),
+    regions = resources.environments
+      .filter((item) => allowedEnvironments.has(item.name))
+      .map((item) => item.region)
+      .filter(Boolean);
+  const value = JSON.stringify([...new Set(regions)]);
+  process.env.HYPERSTACK_REGIONS = value;
+  providers.hyperstack.env.HYPERSTACK_REGIONS = value;
+}
+async function prepareHyperstackCreate(options) {
+  const resources = await managedHyperstackResources(),
+    source = resources.keypairs.find(
+      (item) =>
+        String(item.id) === String(process.env.HYPERSTACK_KEYPAIR_ID || "") ||
+        (item.name === process.env.HYPERSTACK_KEY_NAME &&
+          item.environmentName === process.env.HYPERSTACK_ENVIRONMENT),
+    );
+  if (!source)
+    throw Object.assign(Error("已配置的 Hyperstack SSH Keypair 不存在"), {
+      status: 409,
+    });
+  const credential = managedHyperstackKeypair(source.id, source.name);
+  if (!credential)
+    throw Object.assign(
+      Error("当前 SSH Keypair 不是平台管理的，无法自动连接 VM"),
+      { status: 409, code: "hyperstack_keypair_not_managed" },
+    );
+  const environments = resources.environments.filter(
+    (item) => item.region === options.region,
+  );
+  if (!environments.length)
+    throw Object.assign(
+      Error(`${options.region} 没有可用的 Hyperstack Environment`),
+      { status: 409, code: "hyperstack_environment_region_missing" },
+    );
+  const policy = source.registrationPolicy || {
+      mode: "on-demand",
+      environments: [],
+    },
+    targetEnvironment =
+      environments.find((item) => item.name === source.environmentName) ||
+      environments.find((item) =>
+        (policy.environments || []).includes(item.name),
+      ) ||
+      (policy.mode === "on-demand" ? environments[0] : null);
+  if (!targetEnvironment)
+    throw Object.assign(
+      Error(`${options.region} 未在该 Keypair 的指定 Environment 列表中`),
+      { status: 409, code: "hyperstack_environment_not_selected" },
+    );
+  let targetKeypair = resources.keypairs.find(
+    (item) =>
+      item.environmentName === targetEnvironment.name &&
+      source.fingerprint &&
+      item.fingerprint === source.fingerprint,
+  );
+  if (!targetKeypair) {
+    if (policy.mode !== "on-demand")
+      throw Object.assign(Error("指定 Environment 中尚未注册该 Keypair"), {
+        status: 409,
+      });
+    targetKeypair = await registerManagedHyperstackKeypair(
+      source,
+      targetEnvironment.name,
+      resources,
+    );
+  }
+  return {
+    environmentName: targetEnvironment.name,
+    keyName: targetKeypair.name,
+    credential,
+  };
+}
 async function all(method, ...args) {
   const entries = Object.entries(providers),
     result = await Promise.allSettled(
@@ -1997,8 +2300,17 @@ async function all(method, ...args) {
     errors = [];
   result.forEach((r, i) => {
     const [providerId, p] = entries[i];
-    if (r.status === "fulfilled") data.push(...r.value);
-    else errors.push({ provider: p.name, providerId, error: r.reason.message });
+    if (r.status === "fulfilled") {
+      observeProviderResult(providerId);
+      data.push(...r.value);
+    } else {
+      observeProviderResult(providerId, r.reason);
+      errors.push({
+        provider: p.name,
+        providerId,
+        error: providerAuthErrorMessage(providerId, r.reason.message),
+      });
+    }
   });
   return { data, errors };
 }
@@ -2117,7 +2429,7 @@ async function proxyAgentViaSsh(id, agentPath, method = "GET") {
   const credential = agentCredentials.findByInstance(record.provider, String(id));
   const keyFile = path.join(
     os.tmpdir(),
-    `gpu-fleet-agent-proxy-${randomBytes(12).toString("hex")}.pem`,
+    `fast-gpu-agent-proxy-${randomBytes(12).toString("hex")}.pem`,
   );
   try {
     fs.writeFileSync(keyFile, openSshPrivateKey(managed.privateKey), {
@@ -2168,7 +2480,7 @@ async function runInstanceSshCommand(providerId, id, remote, timeout = 60000) {
     });
   const keyFile = path.join(
     os.tmpdir(),
-    `gpu-fleet-command-${randomBytes(12).toString("hex")}.pem`,
+    `fast-gpu-command-${randomBytes(12).toString("hex")}.pem`,
   );
   try {
     fs.writeFileSync(keyFile, openSshPrivateKey(managed.privateKey), { mode: 0o600 });
@@ -2454,6 +2766,11 @@ async function api(req, res, url) {
     return json(res, 202, { ok: true });
   }
   if (req.method === "GET" && url.pathname === "/api/config/status") {
+    try {
+      await ensureHyperstackRegionMetadata();
+    } catch (error) {
+      console.error("Hyperstack Keypair 区域回填失败", error.message);
+    }
     const base = process.env.BASE_URL,
       baseIssue = base ? publicControlPlaneError(base) : null;
     return json(res, 200, {
@@ -2467,25 +2784,7 @@ async function api(req, res, url) {
         baseUrlSource !== "environment",
       controlPlaneIssue: baseIssue,
       providers: Object.entries(providers).map(([id, p]) => {
-        const saved = providerKeyStore.status(id),
-          tailscaleAuthKeyExpiresAt =
-            id === "hyperstack"
-              ? providerKeyStore.get("__tailscale_auth_key_expires_at__") || ""
-              : "",
-          tailscaleExpiryTime = tailscaleAuthKeyExpiresAt
-            ? Date.parse(`${tailscaleAuthKeyExpiresAt}T23:59:59Z`)
-            : NaN,
-          tailscaleAuthKeyDaysRemaining = Number.isFinite(tailscaleExpiryTime)
-            ? Math.ceil((tailscaleExpiryTime - Date.now()) / 86400000)
-            : null,
-          tailscaleAuthKeyStatus =
-            tailscaleAuthKeyDaysRemaining == null
-              ? "unknown"
-              : tailscaleAuthKeyDaysRemaining < 0
-                ? "expired"
-                : tailscaleAuthKeyDaysRemaining <= 7
-                  ? "expiring"
-                  : "valid";
+        const saved = providerKeyStore.status(id);
         return {
           id,
           name: p.name,
@@ -2494,22 +2793,21 @@ async function api(req, res, url) {
           keys: saved.keys,
           keySuffix: saved.keySuffix,
           keyUrl: providerDefinitions[id]?.keyUrl,
+          authIssue: providerAuthIssues.get(id) || null,
           provisioningReady: validateProvisioning(id, process.env).length === 0,
           missing: validateProvisioning(id, process.env),
           hyperstackConfig:
             id === "hyperstack"
               ? {
                   environment: process.env.HYPERSTACK_ENVIRONMENT || "",
+                  region: process.env.HYPERSTACK_REGION || "",
                   keyName: process.env.HYPERSTACK_KEY_NAME || "",
+                  keypairId: process.env.HYPERSTACK_KEYPAIR_ID || "",
+                  keypairEnvironment:
+                    process.env.HYPERSTACK_KEYPAIR_ENVIRONMENT || "",
                   imageName: process.env.HYPERSTACK_IMAGE_NAME || "",
-                  agentCidr: process.env.HYPERSTACK_AGENT_CIDR || "",
+                  agentCidr: process.env.HYPERSTACK_AGENT_CIDR || "0.0.0.0/0",
                   imageUser: process.env.HYPERSTACK_IMAGE_USER || "",
-                  tailscaleAuthKeyConfigured: Boolean(
-                    process.env.TAILSCALE_AUTH_KEY,
-                  ),
-                  tailscaleAuthKeyExpiresAt,
-                  tailscaleAuthKeyDaysRemaining,
-                  tailscaleAuthKeyStatus,
                 }
               : undefined,
         };
@@ -2632,7 +2930,7 @@ async function api(req, res, url) {
           ),
           endpoint: process.env[keys.endpoint] || "",
           bucket: process.env[keys.bucket] || "",
-          prefix: process.env[keys.prefix] || "",
+          prefix: "",
           region: process.env[keys.region] || "",
           accessKeyId: process.env[keys.accessKeyId] || "",
           secretAccessKey: process.env[keys.secretAccessKey] || "",
@@ -2660,9 +2958,7 @@ async function api(req, res, url) {
         enabled,
         endpoint: String(input.endpoint || "").trim(),
         bucket: String(input.bucket || "").trim(),
-        prefix: String(input.prefix || "")
-          .trim()
-          .replace(/^\/+|\/+$/g, ""),
+        prefix: "",
         region: String(input.region || "").trim(),
         accessKeyId: String(
           input.accessKeyId || process.env[keys.accessKeyId] || "",
@@ -2711,6 +3007,168 @@ async function api(req, res, url) {
     applyStorageConfig(config);
     return json(res, 200, { configured: true, primaryProvider, verification });
   }
+  if (req.method === "GET" && url.pathname === "/api/storage/objects") {
+    const providerId = String(
+        url.searchParams.get("provider") ||
+          process.env.STORAGE_PRIMARY_PROVIDER ||
+          "r2",
+      ),
+      config = storageProviderConfig(providerId);
+    if (!config)
+      throw Object.assign(Error("所选对象存储未启用或配置不完整"), {
+        status: 409,
+        code: "storage_not_configured",
+      });
+    const requestedPrefix = String(url.searchParams.get("prefix") || "").replace(
+        /^\/+|\/+$/g,
+        "",
+      ),
+      prefix = requestedPrefix ? `${requestedPrefix}/` : "",
+      result = await objectStorage.listObjects(
+        objectStorage.createClient(config),
+        config.bucket,
+        {
+          prefix,
+          continuationToken: url.searchParams.get("continuationToken") || "",
+          maxKeys: 100,
+        },
+      );
+    return json(res, 200, {
+      provider: providerId,
+      bucket: config.bucket,
+      prefix: requestedPrefix,
+      ...result,
+    });
+  }
+  if (req.method === "DELETE" && url.pathname === "/api/storage/objects") {
+    const d = await body(req),
+      providerId = String(d.provider || process.env.STORAGE_PRIMARY_PROVIDER || "r2"),
+      config = storageProviderConfig(providerId),
+      keys = Array.isArray(d.keys) ? d.keys.slice(0, 1001) : [];
+    if (!config)
+      throw Object.assign(Error("所选对象存储未启用或配置不完整"), {
+        status: 409,
+        code: "storage_not_configured",
+      });
+    if (!keys.length)
+      throw Object.assign(Error("没有选择要删除的对象"), { status: 400 });
+    const result = await objectStorage.deleteObjects(
+      objectStorage.createClient(config),
+      config.bucket,
+      keys.map(normalizeObjectKey),
+    );
+    return json(res, result.errors.length ? 207 : 200, {
+      provider: providerId,
+      bucket: config.bucket,
+      ...result,
+    });
+  }
+  if (req.method === "POST" && url.pathname === "/api/storage/upload-groups") {
+    if (CLIENT_MODE !== "local")
+      throw Object.assign(Error("文件夹和压缩组上传仅支持桌面客户端"), { status: 409 });
+    const d = await body(req),
+      providerId = String(d.provider || process.env.STORAGE_PRIMARY_PROVIDER || "r2"),
+      config = storageProviderConfig(providerId),
+      boxes = Array.isArray(d.boxes) ? d.boxes.slice(0, 100) : [];
+    if (!config)
+      throw Object.assign(Error("所选对象存储未启用或配置不完整"), { status: 409 });
+    if (!boxes.length)
+      throw Object.assign(Error("没有可上传的选择框"), { status: 400 });
+    const grouped = new Map();
+    for (const box of boxes) {
+      const groupKey = box.groupId == null ? `box-${box.id}` : `group-${box.groupId}`;
+      if (!grouped.has(groupKey)) grouped.set(groupKey, []);
+      grouped.get(groupKey).push(box);
+    }
+    const requiresArchive = [...grouped.values()].some((items) => items.length > 1 || items[0]?.compress !== false);
+    const tarCommand = requiresArchive ? resolveTool("tar").executable : null;
+    if (requiresArchive && !tarCommand)
+      throw Object.assign(Error("本机未找到 tar，无法压缩上传内容"), { status: 409, code: "tar_unavailable" });
+    const archiveDirectory = path.resolve(__dirname, ".data", "storage-archives");
+    fs.mkdirSync(archiveDirectory, { recursive: true });
+    const uploads = [], createdArchives = [], usedArchiveNames = new Set();
+    try {
+      for (const [groupKey, groupBoxes] of grouped) {
+        const shouldCompress = groupBoxes.length > 1 || groupBoxes[0]?.compress !== false;
+        if (!shouldCompress) {
+          const box = groupBoxes[0], files = Array.isArray(box.files) ? box.files : [],
+            prefix = String(box.prefix || "").trim().replace(/^\/+|\/+$/g, ""),
+            uploadName = normalizeObjectKey(String(box.uploadName || box.name || "upload").replace(/^\/+|\/+$/g, "")),
+            rootPath = path.resolve(String(box.rootPath || ""));
+          for (const file of files) {
+            const localPath = path.resolve(String(file.localPath || "")), relativePath = String(file.relativePath || "").replaceAll("\\", "/");
+            if (!relativePath || relativePath.includes("..") || (localPath !== rootPath && !localPath.startsWith(rootPath + path.sep)))
+              throw Object.assign(Error("选择内容包含无效路径"), { status: 400 });
+            if (!fs.existsSync(localPath) || !fs.statSync(localPath).isFile())
+              throw Object.assign(Error(`本地文件不存在或无法读取：${relativePath}`), { status: 404 });
+            const leaf = files.length === 1 && box.kind !== "folder" ? uploadName : `${uploadName}/${relativePath}`,
+              key = resolveDestinationKey(prefix, leaf), fileSize = fs.statSync(localPath).size,
+              client = objectStorage.createClient(config), uploadId = await objectStorage.beginMultipart(client, config.bucket, key, "application/octet-stream"),
+              partSize = objectStorage.choosePartSize(fileSize);
+            activeUploads.set(uploadId, { provider: providerId, bucket: config.bucket, key, fileSize, partSize, localPath, fileName: path.basename(localPath), generatedArchive: false, selectionCount: 1, createdAt: new Date().toISOString() });
+            uploads.push({ uploadId, key, fileName: path.basename(localPath) });
+          }
+          continue;
+        }
+        const archiveBase = groupBoxes.length === 1
+          ? String(groupBoxes[0].name || "upload")
+          : `combined-${groupBoxes.map((box) => String(box.name || "selection")).join("-")}`;
+        const safeBase = archiveBase.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "upload";
+        let archiveName = String(groupBoxes[0]?.uploadName || `${safeBase}.tar.gz`).replace(/^\/+|\/+$/g, "");
+        if (!/\.tar\.gz$/i.test(archiveName)) archiveName += ".tar.gz";
+        archiveName = path.basename(archiveName);
+        for (let suffix = 2; usedArchiveNames.has(archiveName); suffix += 1)
+          archiveName = `${safeBase}-${suffix}.tar.gz`;
+        usedArchiveNames.add(archiveName);
+        const
+          archivePath = path.join(archiveDirectory, `${Date.now()}-${randomBytes(6).toString("hex")}-${archiveName}`),
+          args = ["-czf", archivePath];
+        let fileCount = 0;
+        for (const box of groupBoxes) {
+          const submittedRoot = String(box.rootPath || ""),
+            rootPath = path.resolve(submittedRoot),
+            files = Array.isArray(box.files) ? box.files : [];
+          if (!path.isAbsolute(submittedRoot))
+            throw Object.assign(Error("选择框根路径无效"), { status: 400 });
+          for (const file of files) {
+            if (++fileCount > 20000)
+              throw Object.assign(Error("单个压缩组最多包含 20000 个文件"), { status: 400 });
+            const localPath = path.resolve(String(file.localPath || "")),
+              relativePath = String(file.relativePath || "").replaceAll("\\", "/");
+            if (!relativePath || relativePath.includes("..") || (localPath !== rootPath && !localPath.startsWith(rootPath + path.sep)))
+              throw Object.assign(Error("选择内容包含无效路径"), { status: 400 });
+            if (!fs.existsSync(localPath) || !fs.statSync(localPath).isFile())
+              throw Object.assign(Error(`本地文件不存在或无法读取：${relativePath}`), { status: 404 });
+            args.push("-C", rootPath, relativePath);
+          }
+        }
+        if (!fileCount) continue;
+        await runCommand(tarCommand, args, { timeout: 60 * 60 * 1000 });
+        createdArchives.push(archivePath);
+        const fileSize = fs.statSync(archivePath).size,
+          requested = String(groupBoxes[0]?.prefix || "").trim().replace(/^\/+|\/+$/g, ""),
+          onlyGroup = grouped.size === 1,
+          requestedIsArchive = onlyGroup && /\.tar\.gz$/i.test(requested),
+          key = resolveDestinationKey("", requestedIsArchive ? requested : [requested, archiveName].filter(Boolean).join("/")),
+          client = objectStorage.createClient(config),
+          uploadId = await objectStorage.beginMultipart(client, config.bucket, key, "application/gzip"),
+          partSize = objectStorage.choosePartSize(fileSize);
+        activeUploads.set(uploadId, {
+          provider: providerId, bucket: config.bucket, key, fileSize, partSize,
+          localPath: archivePath, fileName: archiveName, generatedArchive: true,
+          selectionCount: groupBoxes.length, createdAt: new Date().toISOString(),
+        });
+        uploads.push({ uploadId, key, fileName: archiveName });
+      }
+      persistActiveUploads();
+      return json(res, 200, { uploads });
+    } catch (error) {
+      for (const archivePath of createdArchives)
+        if (![...activeUploads.values()].some((record) => record.localPath === archivePath))
+          fs.rmSync(archivePath, { force: true });
+      throw error;
+    }
+  }
   const uploadCreate = req.method === "POST" && url.pathname === "/api/storage/uploads";
   if (uploadCreate) {
     const d = await body(req),
@@ -2745,7 +3203,7 @@ async function api(req, res, url) {
     const fileSize = localFile?.size ?? Number(d.fileSize);
     if (!Number.isFinite(fileSize) || fileSize <= 0)
       throw Object.assign(Error("文件大小无效"), { status: 400, code: "invalid_file_size" });
-    const key = resolveDestinationKey(config.prefix, d.key),
+    const key = resolveDestinationKey("", d.key),
       uploadId = String(d.uploadId || ""),
       partSize = objectStorage.choosePartSize(fileSize),
       partCount = Math.ceil(fileSize / partSize);
@@ -2869,6 +3327,7 @@ async function api(req, res, url) {
         parts,
       );
     activeUploads.delete(uploadId);
+    if (record.generatedArchive) fs.rmSync(record.localPath, { force: true });
     persistActiveUploads();
     return json(res, 200, {
       ok: true,
@@ -2943,6 +3402,7 @@ async function api(req, res, url) {
       parts,
     );
     activeUploads.delete(uploadId);
+    if (record.generatedArchive) fs.rmSync(record.localPath, { force: true });
     persistActiveUploads();
     return json(res, 200, { ok: true, key, bucket: config.bucket, location });
   }
@@ -2985,6 +3445,7 @@ async function api(req, res, url) {
         );
     }
     activeUploads.delete(uploadId);
+    if (record.generatedArchive) fs.rmSync(record.localPath, { force: true });
     persistActiveUploads();
     return json(res, 200, { ok: true, aborted: uploadId });
   }
@@ -3004,6 +3465,7 @@ async function api(req, res, url) {
         } catch {}
       }
       activeUploads.delete(uploadId);
+      if (record.generatedArchive) fs.rmSync(record.localPath, { force: true });
       removed.push({ uploadId, localPath: record.localPath });
     }
     if (removed.length) persistActiveUploads();
@@ -3029,7 +3491,7 @@ async function api(req, res, url) {
       const output = await runInstanceSshCommand(
         providerId,
         id,
-        "state=/opt/gpu-fleet/storage/state.json; if test -f \"$state\"; then cat \"$state\"; else printf '{}'; fi",
+        "state=/opt/fast-gpu/storage/state.json; if test -f \"$state\"; then cat \"$state\"; else printf '{}'; fi",
       );
       const state = JSON.parse(output || "{}");
       if (state.target) {
@@ -3045,7 +3507,7 @@ async function api(req, res, url) {
     const stateOutput = await runInstanceSshCommand(
       providerId,
       id,
-      "test -f /opt/gpu-fleet/storage/state.json && cat /opt/gpu-fleet/storage/state.json || printf '{}'",
+      "test -f /opt/fast-gpu/storage/state.json && cat /opt/fast-gpu/storage/state.json || printf '{}'",
     );
     const state = JSON.parse(stateOutput || "{}"),
       mountTarget = target || state.target;
@@ -3053,7 +3515,7 @@ async function api(req, res, url) {
       await runInstanceSshCommand(
         providerId,
         id,
-        `if mountpoint -q ${quote(mountTarget)}; then (command -v fusermount3 >/dev/null && fusermount3 -u ${quote(mountTarget)}) || (command -v fusermount >/dev/null && fusermount -u ${quote(mountTarget)}) || umount ${quote(mountTarget)}; fi; rm -f /opt/gpu-fleet/storage/state.json; echo disconnected`,
+        `if mountpoint -q ${quote(mountTarget)}; then (command -v fusermount3 >/dev/null && fusermount3 -u ${quote(mountTarget)}) || (command -v fusermount >/dev/null && fusermount -u ${quote(mountTarget)}) || umount ${quote(mountTarget)}; fi; rm -f /opt/fast-gpu/storage/state.json; echo disconnected`,
       );
     return json(res, 200, { ok: true, disconnected: Boolean(mountTarget) });
   }
@@ -3075,7 +3537,8 @@ async function api(req, res, url) {
       ),
       prefix = String(d.prefix ?? values.prefix).trim().replace(/^\/+|\/+$/g, ""),
       target = String(d.target || (d.mode === "mount" ? `/data/object-storage/${providerId}` : "/data/datasets")).trim(),
-      mode = d.mode === "mount" ? "mount" : "copy";
+      mode = d.mode === "mount" ? "mount" : "copy",
+      autoInstall = d.autoInstall !== false;
     if (!values.endpoint || !values.bucket || !values.accessKeyId || !values.secretAccessKey)
       throw Object.assign(Error("所选对象存储配置不完整"), { status: 409 });
     if (!/^\/[a-zA-Z0-9._/-]+$/.test(target) || target.includes(".."))
@@ -3099,18 +3562,21 @@ async function api(req, res, url) {
       encodedConfig = Buffer.from(config).toString("base64"),
       quote = (value) => `'${String(value).replaceAll("'", "'\"'\"'")}'`,
       source = `${providerId}:${values.bucket}${prefix ? `/${prefix}` : ""}`,
-      configPath = "/opt/gpu-fleet/storage/rclone.conf",
-      state = Buffer.from(JSON.stringify({ mode, provider: providerId, source, target, updatedAt: new Date().toISOString() })).toString("base64"),
-      prepare = `set -Eeuo pipefail; command -v rclone >/dev/null || { echo '实例未安装 rclone'; exit 12; }; mkdir -p ${quote(path.posix.dirname(configPath))} ${quote(target)}; printf %s ${quote(encodedConfig)} | base64 -d > ${quote(configPath)}; chmod 600 ${quote(configPath)}; `;
+      configPath = "/opt/fast-gpu/storage/rclone.conf",
+      state = Buffer.from(JSON.stringify({ mode, provider: providerId, prefix, source, target, updatedAt: new Date().toISOString() })).toString("base64"),
+      installMountTools = autoInstall
+        ? `if ! command -v rclone >/dev/null || { ! command -v fusermount3 >/dev/null && ! command -v fusermount >/dev/null; } || ! command -v mountpoint >/dev/null; then RUN_AS_ROOT=''; test "$(id -u)" = 0 || { command -v sudo >/dev/null || { echo '自动安装需要 root 或 sudo 权限'; exit 12; }; RUN_AS_ROOT=sudo; }; if command -v apt-get >/dev/null; then $RUN_AS_ROOT apt-get update && $RUN_AS_ROOT env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends rclone fuse3 util-linux; elif command -v apk >/dev/null; then $RUN_AS_ROOT apk add --no-cache rclone fuse3 util-linux; elif command -v dnf >/dev/null; then $RUN_AS_ROOT dnf install -y rclone fuse3 util-linux; elif command -v yum >/dev/null; then $RUN_AS_ROOT yum install -y rclone fuse3 util-linux; else echo '无法识别实例的软件包管理器，请手动安装 rclone、fuse3 和 util-linux'; exit 12; fi; fi; `
+        : "",
+      prepare = `set -Eeuo pipefail; ${mode === "mount" ? installMountTools : ""}command -v rclone >/dev/null || { echo '实例未安装 rclone，请勾选自动安装后重试'; exit 12; }; mkdir -p ${quote(path.posix.dirname(configPath))} ${quote(target)}; printf %s ${quote(encodedConfig)} | base64 -d > ${quote(configPath)}; chmod 600 ${quote(configPath)}; `;
     const remote =
       mode === "mount"
         ? prepare +
-          `test -e /dev/fuse || { echo '该实例未开放 /dev/fuse，不能进行 FUSE 挂载，请使用选择性同步'; exit 13; }; ` +
-          `mountpoint -q ${quote(target)} || { nohup rclone mount --config ${quote(configPath)} --read-only --vfs-cache-mode minimal ${quote(source)} ${quote(target)} > /opt/gpu-fleet/storage/mount.log 2>&1 & sleep 2; mountpoint -q ${quote(target)} || { cat /opt/gpu-fleet/storage/mount.log; exit 14; }; }; printf %s ${quote(state)} | base64 -d > /opt/gpu-fleet/storage/state.json; echo ${quote(`已只读挂载到 ${target}`)}`
+          `test -e /dev/fuse || { echo '挂载工具已就绪，但该实例的宿主机没有开放挂载设备；请改用复制到本地磁盘'; exit 13; }; ` +
+          `mountpoint -q ${quote(target)} || { nohup rclone mount --config ${quote(configPath)} --read-only --vfs-cache-mode minimal ${quote(source)} ${quote(target)} > /opt/fast-gpu/storage/mount.log 2>&1 & sleep 2; mountpoint -q ${quote(target)} || { cat /opt/fast-gpu/storage/mount.log; exit 14; }; }; printf %s ${quote(state)} | base64 -d > /opt/fast-gpu/storage/state.json; echo ${quote(`已只读挂载到 ${target}`)}`
         : prepare +
-          `rclone copy --config ${quote(configPath)} --checksum --transfers 16 --stats-one-line ${quote(source)} ${quote(target)}; printf %s ${quote(state)} | base64 -d > /opt/gpu-fleet/storage/state.json; echo ${quote(`已同步到 ${target}`)}`;
+          `rclone copy --config ${quote(configPath)} --checksum --transfers 16 --stats-one-line ${quote(source)} ${quote(target)}; printf %s ${quote(state)} | base64 -d > /opt/fast-gpu/storage/state.json; echo ${quote(`已同步到 ${target}`)}`;
     const token = randomBytes(12).toString("hex"),
-      keyFile = path.join(os.tmpdir(), `gpu-fleet-storage-${token}.pem`);
+      keyFile = path.join(os.tmpdir(), `fast-gpu-storage-${token}.pem`);
     try {
       fs.writeFileSync(keyFile, openSshPrivateKey(managed.privateKey), { mode: 0o600 });
       securePrivateKeyFile(keyFile);
@@ -3138,10 +3604,13 @@ async function api(req, res, url) {
       throw Object.assign(Error("未知供应商"), { status: 404 });
     const d = await body(req),
       status = providerKeyStore.add(id, d.apiKey, d.label);
+    providerAuthIssues.delete(id);
     billingStore.bindProviderCredential(id, status.id);
     process.env[definition.env] = String(d.apiKey).trim();
     adapter.token = process.env[definition.env];
     adapter.env[definition.env] = process.env[definition.env];
+    if (id === "hyperstack" && process.env.HYPERSTACK_ENVIRONMENT)
+      await ensureHyperstackRegionMetadata(true);
     return json(res, 200, { ...status, name: adapter.name });
   }
   const balanceMatch = url.pathname.match(
@@ -3178,6 +3647,8 @@ async function api(req, res, url) {
       throw Object.assign(Error("未知供应商"), { status: 404 });
     if (!providerKeyStore.removeKey(id, keyId))
       throw Object.assign(Error("API Key 不存在"), { status: 404 });
+    if (providerAuthIssues.get(id)?.keyId === keyId)
+      providerAuthIssues.delete(id);
     const active = providerKeyStore.get(id);
     if (active) process.env[definition.env] = active;
     else delete process.env[definition.env];
@@ -3219,6 +3690,7 @@ async function api(req, res, url) {
       throw Object.assign(Error("未知供应商"), { status: 404 });
     if (!providerKeyStore.activateKey(id, keyId))
       throw Object.assign(Error("API Key 不存在"), { status: 404 });
+    providerAuthIssues.delete(id);
     billingStore.bindProviderCredential(id, keyId);
     const active = providerKeyStore.get(id);
     process.env[definition.env] = active;
@@ -3244,7 +3716,56 @@ async function api(req, res, url) {
     req.method === "GET" &&
     url.pathname === "/api/providers/hyperstack/resources"
   )
-    return json(res, 200, await providers.hyperstack.configurationResources());
+    return json(res, 200, await managedHyperstackResources());
+  const keypairRegistration = url.pathname.match(
+    /^\/api\/providers\/hyperstack\/keypairs\/([^/]+)\/registration$/,
+  );
+  if (req.method === "PUT" && keypairRegistration) {
+    const keypairId = decodeURIComponent(keypairRegistration[1]),
+      d = await body(req),
+      mode = d.mode === "selected" ? "selected" : "on-demand",
+      requestedEnvironments = Array.isArray(d.environments)
+        ? [...new Set(d.environments.map((item) => String(item).trim()).filter(Boolean))]
+        : [],
+      resources = await managedHyperstackResources(),
+      source = resources.keypairs.find(
+        (item) => String(item.id) === keypairId,
+      );
+    if (!source)
+      throw Object.assign(Error("Hyperstack Keypair 不存在"), {
+        status: 404,
+      });
+    if (!source.platformManaged)
+      throw Object.assign(Error("只能配置平台管理的 SSH Keypair"), {
+        status: 409,
+      });
+    const knownEnvironments = new Set(
+      resources.environments.map((item) => item.name),
+    );
+    if (requestedEnvironments.some((name) => !knownEnvironments.has(name)))
+      throw Object.assign(Error("指定的 Environment 不存在"), {
+        status: 409,
+      });
+    if (mode === "selected")
+      for (const environmentName of requestedEnvironments)
+        await registerManagedHyperstackKeypair(
+          source,
+          environmentName,
+          resources,
+        );
+    const policies = hyperstackKeypairPolicies();
+    policies[keypairId] = {
+      mode,
+      environments: mode === "selected" ? requestedEnvironments : [],
+    };
+    saveHyperstackKeypairPolicies(policies);
+    await prepareHyperstackOfferRegions();
+    return json(res, 200, {
+      saved: true,
+      keypairId,
+      ...policies[keypairId],
+    });
+  }
   if (
     req.method === "POST" &&
     url.pathname === "/api/providers/hyperstack/keypairs"
@@ -3253,14 +3774,23 @@ async function api(req, res, url) {
       environmentName = String(d.environment || "").trim();
     if (!environmentName)
       throw Object.assign(Error("请先选择 Environment"), { status: 400 });
-    const name = `gpu-fleet-managed-${Date.now().toString(36)}`,
+    const name = `fast-gpu-managed-${Date.now().toString(36)}`,
       managed = sshStore.createKey();
     const created = await providers.hyperstack.importKeypair({
       name,
       environmentName,
       publicKey: managed.publicKey,
     });
-    const keypairId = String(created.id || name);
+    let keypairId = String(created.id || "");
+    if (!keypairId) {
+      const refreshed = await providers.hyperstack.configurationResources(),
+        imported = refreshed.keypairs.find(
+          (item) =>
+            item.name === (created.name || name) &&
+            item.environmentName === environmentName,
+        );
+      keypairId = String(imported?.id || name);
+    }
     try {
       sshStore.save(`keypair:${keypairId}`, {
         provider: "hyperstack",
@@ -3279,7 +3809,7 @@ async function api(req, res, url) {
       );
     }
     return json(res, 201, {
-      id: created.id,
+      id: keypairId,
       name: created.name || name,
       environmentName: created.environment?.name || environmentName,
       fingerprint: created.fingerprint,
@@ -3381,6 +3911,7 @@ async function api(req, res, url) {
         HYPERSTACK_KEY_NAME: String(d.keyName || "").trim(),
         HYPERSTACK_IMAGE_NAME: String(d.imageName || "").trim(),
         HYPERSTACK_IMAGE_USER: String(d.imageUser || "ubuntu").trim(),
+        HYPERSTACK_AGENT_CIDR: String(d.agentCidr || "0.0.0.0/0").trim(),
       };
     if (
       !values.HYPERSTACK_ENVIRONMENT ||
@@ -3392,6 +3923,42 @@ async function api(req, res, url) {
         Error("Environment、SSH Keypair、Image 和访问 CIDR 均为必填项"),
         { status: 400 },
       );
+    const resources = await providers.hyperstack.configurationResources(),
+      selectedEnvironment = resources.environments.find(
+        (item) => item.name === values.HYPERSTACK_ENVIRONMENT,
+      ),
+      selectedKeypair = resources.keypairs.find(
+        (item) =>
+          String(item.id) === String(d.keypairId || "") ||
+          (item.name === values.HYPERSTACK_KEY_NAME &&
+            item.environmentName === values.HYPERSTACK_ENVIRONMENT),
+      );
+    if (!selectedEnvironment)
+      throw Object.assign(Error("所选 Hyperstack Environment 不存在"), {
+        status: 409,
+      });
+    if (!selectedKeypair)
+      throw Object.assign(Error("所选 Hyperstack SSH Keypair 不存在"), {
+        status: 409,
+      });
+    if (!managedHyperstackKeypair(selectedKeypair.id, selectedKeypair.name))
+      throw Object.assign(
+        Error("请选择带有“平台管理”标记的 SSH Keypair"),
+        { status: 409, code: "hyperstack_keypair_not_managed" },
+      );
+    if (selectedKeypair.environmentName !== values.HYPERSTACK_ENVIRONMENT)
+      throw Object.assign(
+        Error("所选 SSH Keypair 不属于所选 Environment"),
+        { status: 409 },
+      );
+    values.HYPERSTACK_REGION =
+      selectedKeypair.region || selectedEnvironment.region;
+    values.HYPERSTACK_KEYPAIR_ENVIRONMENT = selectedKeypair.environmentName;
+    values.HYPERSTACK_KEYPAIR_ID = String(selectedKeypair.id);
+    if (!values.HYPERSTACK_REGION)
+      throw Object.assign(Error("无法确认所选 SSH Keypair 的区域"), {
+        status: 409,
+      });
     if (
       values.HYPERSTACK_AGENT_CIDR &&
       !/^(?:\d{1,3}\.){3}\d{1,3}\/(?:[0-9]|[12][0-9]|3[0-2])$/.test(
@@ -3401,61 +3968,19 @@ async function api(req, res, url) {
       throw Object.assign(Error("访问 CIDR 格式无效，例如 203.0.113.10/32"), {
         status: 400,
       });
-    const tailscaleAuthKey = String(d.tailscaleAuthKey || "").trim();
-    const tailscaleAuthKeyExpiresAt = String(
-      d.tailscaleAuthKeyExpiresAt || "",
-    ).trim();
-    if (
-      tailscaleAuthKeyExpiresAt &&
-      !/^\d{4}-\d{2}-\d{2}$/.test(tailscaleAuthKeyExpiresAt)
-    )
-      throw Object.assign(Error("Tailscale Auth Key 到期日期格式无效"), {
-        status: 400,
-      });
-    if (tailscaleAuthKey && !d.tailscaleReusableConfirmed)
-      throw Object.assign(
-        Error("请确认已在 Tailscale 为该 Auth Key 开启 Reusable"),
-        { status: 400, code: "tailscale_auth_key_not_reusable" },
-      );
-    if (!tailscaleAuthKeyExpiresAt && tailscaleAuthKey)
-      throw Object.assign(Error("请填写 Tailscale Auth Key 的到期日期"), {
-        status: 400,
-        code: "tailscale_auth_key_expiry_missing",
-      });
-    if (
-      tailscaleAuthKey &&
-      Date.parse(`${tailscaleAuthKeyExpiresAt}T23:59:59Z`) < Date.now()
-    )
-      throw Object.assign(Error("Tailscale Auth Key 的到期日期不能早于今天"), {
-        status: 400,
-        code: "tailscale_auth_key_expired",
-      });
-    if (tailscaleAuthKey) {
-      providerKeyStore.set("__tailscale_auth_key__", tailscaleAuthKey);
-      process.env.TAILSCALE_AUTH_KEY = tailscaleAuthKey;
-      providers.hyperstack.env.TAILSCALE_AUTH_KEY = tailscaleAuthKey;
-    }
-    if (tailscaleAuthKeyExpiresAt)
-      providerKeyStore.set(
-        "__tailscale_auth_key_expires_at__",
-        tailscaleAuthKeyExpiresAt,
-      );
-    if (!process.env.TAILSCALE_AUTH_KEY)
-      throw Object.assign(Error("Tailscale Auth Key 为必填项"), {
-        status: 400,
-        code: "tailscale_auth_key_missing",
-      });
     providerKeyStore.set("__hyperstack_config__", JSON.stringify(values));
     Object.assign(process.env, values);
     Object.assign(providers.hyperstack.env, values);
     return json(res, 200, {
       configured: true,
       environment: values.HYPERSTACK_ENVIRONMENT,
+      region: values.HYPERSTACK_REGION,
       keyName: values.HYPERSTACK_KEY_NAME,
+      keypairId: values.HYPERSTACK_KEYPAIR_ID,
+      keypairEnvironment: values.HYPERSTACK_KEYPAIR_ENVIRONMENT,
       imageName: values.HYPERSTACK_IMAGE_NAME,
       imageUser: values.HYPERSTACK_IMAGE_USER,
-      tailscaleAuthKeyConfigured: true,
-      tailscaleAuthKeyExpiresAt,
+      agentCidr: values.HYPERSTACK_AGENT_CIDR,
     });
   }
   if (req.method === "GET" && url.pathname === "/api/runtime-images")
@@ -3464,6 +3989,25 @@ async function api(req, res, url) {
         ({ image, prebuiltImage, onDemandImage, ...item }) => item,
       ),
     });
+  if (req.method === "GET" && url.pathname === "/api/image-profiles")
+    return json(res, 200, {
+      profiles: imageProfileStore.list(),
+      defaults: imageProfileStore.defaults(),
+    });
+  if (req.method === "POST" && url.pathname === "/api/image-profiles")
+    return json(res, 201, { profile: imageProfileStore.create(await body(req)) });
+  const imageProfileRoute = url.pathname.match(/^\/api\/image-profiles\/([^/]+)$/);
+  if (imageProfileRoute && req.method === "PUT")
+    return json(res, 200, {
+      profile: imageProfileStore.update(
+        decodeURIComponent(imageProfileRoute[1]),
+        await body(req),
+      ),
+    });
+  if (imageProfileRoute && req.method === "DELETE") {
+    imageProfileStore.remove(decodeURIComponent(imageProfileRoute[1]));
+    return json(res, 200, { ok: true });
+  }
   if (
     req.method === "POST" &&
     url.pathname === "/api/provision/hyperstack-status"
@@ -3526,6 +4070,8 @@ async function api(req, res, url) {
     throw Object.assign(Error("未知 provision 状态"), { status: 400 });
   }
   if (req.method === "GET" && url.pathname === "/api/offers") {
+    await ensureHyperstackRegionMetadata();
+    await prepareHyperstackOfferRegions();
     const r = await all(
       "listOffers",
       url.searchParams.get("refresh") === "1",
@@ -3663,14 +4209,6 @@ async function api(req, res, url) {
           (instanceFirstSeen.get(id) || Date.now()) + telemetryGraceMs;
         return {
           ...x,
-          sshCommand:
-            x.accessType === "tailscale"
-              ? `ssh -i <private-key> ${x.sshUser || "<image-user>"}@<tailscale-ip>`
-              : x.sshCommand,
-          accessMessage:
-            x.accessType === "tailscale"
-              ? "无公网 IP；请在 Tailscale 管理后台获取 100.x.x.x 地址"
-              : x.accessMessage,
           price:
             Number(x.price) > 0
               ? Number(x.price)
@@ -3760,25 +4298,51 @@ async function api(req, res, url) {
     if (!d.provider || !d.productId)
       throw Object.assign(Error("provider 与 productId 必填"), { status: 400 });
     if (d.provider !== "autodl") {
-      const selectedImage = resolveRuntimeImage(
-        d.imageVersion,
-        process.env,
-        d.imageBuildMode,
-        d.provider,
-      );
+      const configuredProfile = d.imageProfileId
+        ? imageProfileStore.get(d.imageProfileId)
+        : null;
+      if (d.imageProfileId && !configuredProfile)
+        throw Object.assign(Error("所选镜像启动配置不存在，请刷新后重试"), {
+          status: 400,
+          code: "invalid_image_profile",
+        });
+      const selectedImage = configuredProfile
+        ? {
+          id: configuredProfile.id,
+          image: configuredProfile.image,
+          cudaMajor: configuredProfile.cudaMajor,
+          buildMode: configuredProfile.kind,
+          allowCuda128Fallback: false,
+        }
+        : d.imageVersion === "custom"
+        ? resolveCustomRuntimeImage(d.customImageUrl, d.customCudaMajor)
+        : resolveRuntimeImage(
+          d.imageVersion,
+          process.env,
+          d.imageBuildMode,
+          d.provider,
+        );
       d.imageVersion = selectedImage.id;
       d.imageBuildMode = selectedImage.buildMode;
       d.imageUrl = selectedImage.image;
       d.expectedCudaMajor = selectedImage.cudaMajor;
+      d.customImage = Boolean(selectedImage.custom);
+      d.startupScript = configuredProfile?.startupScript || "";
+      d.startupDownloads = configuredProfile?.downloads || [];
       d.allowCuda128Fallback = Boolean(selectedImage.allowCuda128Fallback);
     }
     if (d.provider === "hyperstack")
       d.provisionToken = randomBytes(24).toString("hex");
-    const managed = ["ppio", "autodl", "hyperstack", "runpod"].includes(
-      d.provider,
-    )
+    const hyperstackDeployment =
+        d.provider === "hyperstack" ? await prepareHyperstackCreate(d) : null,
+      managed = ["ppio", "autodl", "runpod"].includes(d.provider)
       ? sshStore.createKey()
       : null;
+    if (hyperstackDeployment) {
+      d.environmentName = hyperstackDeployment.environmentName;
+      d.keyName = hyperstackDeployment.keyName;
+      d.sshPublicKey = hyperstackDeployment.credential.publicKey;
+    }
     if (managed) d.sshPublicKey = managed.publicKey;
     let item;
     try {
@@ -3826,11 +4390,12 @@ async function api(req, res, url) {
       },
       { createdAt },
     );
-    if (managed)
+    const instanceCredential = managed || hyperstackDeployment?.credential;
+    if (instanceCredential)
       sshStore.save(item.id, {
         provider: d.provider,
-        privateKey: managed.privateKey,
-        publicKey: managed.publicKey,
+        privateKey: instanceCredential.privateKey,
+        publicKey: instanceCredential.publicKey,
         internalPort: sshStore.port,
         username: item.sshUser || "root",
       });
@@ -3838,6 +4403,13 @@ async function api(req, res, url) {
       hyperstackProvisioning.set(d.provisionToken, {
         id: item.id,
         createdAt: Date.now(),
+      });
+    if (d.provider !== "autodl")
+      instanceLaunchProfiles.set(`${d.provider}:${item.id}`, {
+        profileId: d.imageVersion,
+        cudaMajor: d.expectedCudaMajor,
+        startupScript: d.startupScript || "",
+        downloads: d.startupDownloads || [],
       });
     return json(res, 202, {
       ...item,
@@ -4071,7 +4643,7 @@ async function api(req, res, url) {
     if (!managed)
       throw Object.assign(Error("该实例没有可下载的托管私钥"), { status: 404 });
     const identityFile =
-      `gpu-fleet-${providerId}-${id}`.replace(/[^a-z0-9._-]/gi, "_") + ".pem";
+      `fast-gpu-${providerId}-${id}`.replace(/[^a-z0-9._-]/gi, "_") + ".pem";
     return json(
       res,
       200,
@@ -4095,7 +4667,7 @@ async function api(req, res, url) {
         status: 409,
       });
     const token = randomBytes(12).toString("hex"),
-      keyFile = path.join(os.tmpdir(), `gpu-fleet-check-${token}.pem`);
+      keyFile = path.join(os.tmpdir(), `fast-gpu-check-${token}.pem`);
     try {
       fs.writeFileSync(keyFile, openSshPrivateKey(managed.privateKey), {
         mode: 0o600,
@@ -4151,10 +4723,10 @@ async function api(req, res, url) {
       remoteParent = path.posix.dirname(remotePath),
       filename = path.posix.basename(relativePath),
       token = randomBytes(12).toString("hex"),
-      keyFile = path.join(os.tmpdir(), `gpu-fleet-upload-${token}.pem`),
+      keyFile = path.join(os.tmpdir(), `fast-gpu-upload-${token}.pem`),
       localFile = path.join(
         os.tmpdir(),
-        `gpu-fleet-upload-${token}-${path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, "_") || "upload.bin"}`,
+        `fast-gpu-upload-${token}-${path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, "_") || "upload.bin"}`,
       ),
       common = [
         "-i",
@@ -4180,7 +4752,7 @@ async function api(req, res, url) {
       if (req.headers["x-extract-archive"] === "1") {
         // Bundled upload: a single .tar.gz produced by the browser.
         const archiveName = `${token}.tar.gz`,
-          remoteArchive = `/tmp/gpu-fleet-upload-${archiveName}`;
+          remoteArchive = `/tmp/fast-gpu-upload-${archiveName}`;
         try {
           await runCommand(
             "ssh",
@@ -4316,7 +4888,7 @@ async function api(req, res, url) {
         status: 400,
       });
     const token = randomBytes(12).toString("hex"),
-      keyFile = path.join(os.tmpdir(), `gpu-fleet-rsync-${token}.pem`);
+      keyFile = path.join(os.tmpdir(), `fast-gpu-rsync-${token}.pem`);
     try {
       fs.writeFileSync(keyFile, openSshPrivateKey(managed.privateKey), {
         mode: 0o600,
@@ -4373,8 +4945,8 @@ async function api(req, res, url) {
             status: 409,
             code: "tar_unavailable",
           });
-        const localArchive = path.join(os.tmpdir(), `gpu-fleet-sync-${token}.tar.gz`),
-          remoteArchive = `/tmp/gpu-fleet-sync-${token}.tar.gz`,
+        const localArchive = path.join(os.tmpdir(), `fast-gpu-sync-${token}.tar.gz`),
+          remoteArchive = `/tmp/fast-gpu-sync-${token}.tar.gz`,
           baseName = path.basename(localPath) || "data",
           parentName = path.dirname(localPath) || ".",
           sshBase = [
@@ -4479,7 +5051,7 @@ async function api(req, res, url) {
       const managed = await managedSshConnection(providerId, id),
         probeKey = path.join(
           os.tmpdir(),
-          `gpu-fleet-probe-${randomBytes(12).toString("hex")}.pem`,
+          `fast-gpu-probe-${randomBytes(12).toString("hex")}.pem`,
         );
       try {
         fs.writeFileSync(probeKey, openSshPrivateKey(managed.privateKey), {
@@ -4595,7 +5167,7 @@ async function api(req, res, url) {
         { status: 503, code: "ssh_client_unavailable" },
       );
     const sessionId = randomBytes(18).toString("hex"),
-      keyFile = path.join(os.tmpdir(), `gpu-fleet-${sessionId}.pem`);
+      keyFile = path.join(os.tmpdir(), `fast-gpu-${sessionId}.pem`);
     try {
       fs.writeFileSync(keyFile, openSshPrivateKey(managed.privateKey), {
         mode: 0o600,
@@ -4721,7 +5293,7 @@ async function api(req, res, url) {
           await runInstanceSshCommand(
             d.provider,
             id,
-            "state=/opt/gpu-fleet/storage/state.json; target=''; if test -f \"$state\"; then target=$(node -e \"try{process.stdout.write(require(process.argv[1]).target||'')}catch{}\" \"$state\" 2>/dev/null || true); fi; if test -n \"$target\" && mountpoint -q \"$target\"; then (command -v fusermount3 >/dev/null && fusermount3 -u \"$target\") || (command -v fusermount >/dev/null && fusermount -u \"$target\") || umount \"$target\"; fi; rm -f \"$state\"",
+            "state=/opt/fast-gpu/storage/state.json; target=''; if test -f \"$state\"; then target=$(node -e \"try{process.stdout.write(require(process.argv[1]).target||'')}catch{}\" \"$state\" 2>/dev/null || true); fi; if test -n \"$target\" && mountpoint -q \"$target\"; then (command -v fusermount3 >/dev/null && fusermount3 -u \"$target\") || (command -v fusermount >/dev/null && fusermount -u \"$target\") || umount \"$target\"; fi; rm -f \"$state\"",
             30000,
           );
         } catch (error) {
@@ -5000,7 +5572,7 @@ http
       if (req.method === "GET" && url.pathname === "/api/tunnel/health")
         return json(res, 200, {
           ok: true,
-          service: "gpu-fleet",
+          service: "fast-gpu",
           token: controlPlaneProbeToken,
         });
       const user = sessionUser(req),
@@ -5056,11 +5628,18 @@ http
       res.writeHead(200, { "content-type": type, "cache-control": "no-store" });
       fs.createReadStream(file).pipe(res);
     } catch (e) {
+      const providerId = providerIdForError(e);
+      if (providerId) observeProviderResult(providerId, e);
       const status = e.status || (e instanceof ProviderError ? e.status : 500);
       if (!res.destroyed && !res.writableEnded)
         json(res, status, {
-          error: e.message,
-          code: e.code,
+          error: providerId
+            ? providerAuthErrorMessage(providerId, e.message)
+            : e.message,
+          code:
+            providerId && Number(e.status) === 401
+              ? "provider_authorization_expired"
+              : e.code,
           provider: e.provider,
           details:
             process.env.NODE_ENV === "development" ? e.details : undefined,

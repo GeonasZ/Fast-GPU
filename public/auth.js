@@ -8,6 +8,28 @@ const errorBox=document.querySelector('#authError');
 const submit=document.querySelector('#submitAuth');
 let mode='login';
 
+function setupDesktopTitlebar(){
+  if(!window.fastGpuWindow)return;
+  const titlebar=document.createElement('div');
+  titlebar.className='desktop-titlebar';
+  titlebar.setAttribute('aria-label','应用窗口标题栏');
+  titlebar.innerHTML='<div class="desktop-title"><span class="desktop-title-logo">G</span><strong>Fast GPU</strong></div><div class="desktop-window-controls"><button type="button" data-window-action="minimize" aria-label="最小化">—</button><button type="button" data-window-action="maximize" aria-label="最大化">□</button><button type="button" data-window-action="close" aria-label="关闭">×</button></div>';
+  document.body.prepend(titlebar);
+  document.documentElement.classList.add('electron-client-root');
+  document.body.classList.add('electron-client');
+  const maximizeButton=document.querySelector('[data-window-action="maximize"]');
+  const showMaximized=maximized=>{
+    maximizeButton.textContent=maximized?'❐':'□';
+    maximizeButton.setAttribute('aria-label',maximized?'还原窗口':'最大化');
+  };
+  document.querySelector('[data-window-action="minimize"]').onclick=()=>window.fastGpuWindow.minimize();
+  maximizeButton.onclick=async()=>showMaximized(await window.fastGpuWindow.toggleMaximize());
+  document.querySelector('[data-window-action="close"]').onclick=()=>window.fastGpuWindow.close();
+  window.fastGpuWindow.isMaximized().then(showMaximized);
+  window.fastGpuWindow.onMaximizedChange(showMaximized);
+}
+setupDesktopTitlebar();
+
 function setMode(next){
   mode=next;
   const registering=mode==='register';
