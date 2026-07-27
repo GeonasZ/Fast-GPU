@@ -140,16 +140,17 @@
 .storage-settings { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
 .storage-settings p, .s3-actions small { color: var(--muted); }
 .storage-provider-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.s3-form { min-width: 0; margin: 0; padding: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; border: 0; }
-.s3-form legend { width: 100%; grid-column: 1 / -1; padding: 2px 0 18px; margin-bottom: 6px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
-.s3-form legend span { display: grid; gap: 8px; }
-.s3-form legend .storage-provider-actions { display: flex; grid-auto-flow: initial; align-items: center; gap: 10px; }
+.s3-form { min-width: 0; margin: 0; padding: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.s3-form .s3-legend { width: 100%; grid-column: 1 / -1; padding: 0 0 18px; margin-bottom: 6px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.s3-form .s3-legend > span { display: grid; gap: 8px; min-width: 0; }
+.s3-form .s3-legend .storage-provider-actions { display: flex; grid-auto-flow: initial; align-items: center; gap: 10px; flex-shrink: 0; }
 .storage-console-link { padding: 6px 9px; color: #176b42; background: #eef7f2; border: 1px solid #b9d7c7; border-radius: 7px; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .storage-console-link:hover { color: #fff; background: #176b42; border-color: #176b42; }
 .storage-console-link:focus-visible { outline: 3px solid rgba(27, 109, 71, .14); outline-offset: 1px; }
-.s3-form legend small { line-height: 1.35; }
-.s3-form legend small, .storage-provider-hint { color: var(--muted); }
+.s3-form .s3-legend small { line-height: 1.35; }
+.s3-form .s3-legend small, .storage-provider-hint { color: var(--muted); }
 .storage-toggle { display: flex !important; grid-auto-flow: column; align-items: center; }
+.s3-card-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 10px; margin-top: 2px; }
 .s3-form label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
 .s3-form input:not([type="checkbox"]), .s3-actions select { border: 1px solid var(--line); border-radius: 7px; padding: 10px; }
 .searchable-select { position: relative; min-width: 0; }

@@ -1,4 +1,4 @@
-const http = require("node:http");
+﻿const http = require("node:http");
 const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -17,6 +17,7 @@ const { adapters, ProviderError } = require("./lib/providers");
 const { createCredentialStore } = require("./lib/credential-store");
 const { createProviderKeyStore } = require("./lib/provider-key-store");
 const { createBillingStore } = require("./lib/billing-store");
+const objectStorage = require("./lib/object-storage");
 const {
   validateProvisioning,
   resolveCuda13Image,
@@ -343,6 +344,48 @@ function applyStorageConfig(config) {
       else delete process.env[key];
     }
   }
+}
+// Resolved credentials + bucket for an enabled storage provider. Returns null
+// when the provider is disabled or incomplete, so callers can 409 early.
+function storageProviderConfig(providerId) {
+  const keys = STORAGE_ENV_KEYS[providerId];
+  if (!keys || process.env[keys.enabled] !== "1") return null;
+  const bucket = process.env[keys.bucket];
+  if (
+    !bucket ||
+    !process.env[keys.endpoint] ||
+    !process.env[keys.accessKeyId] ||
+    !process.env[keys.secretAccessKey]
+  )
+    return null;
+  return {
+    provider: providerId,
+    endpoint: process.env[keys.endpoint],
+    region: process.env[keys.region],
+    accessKeyId: process.env[keys.accessKeyId],
+    secretAccessKey: process.env[keys.secretAccessKey],
+    bucket,
+    prefix: process.env[keys.prefix] || "",
+  };
+}
+// In-flight multipart uploads. The authoritative resume state lives on R2
+// (UploadId + parts); this map just lets us reconcile on create and list
+// resumable uploads. It is rebuilt from R2 on demand when the client supplies
+// an uploadId, so it survives nothing and needs to survive nothing.
+const activeUploads = new Map();
+function normalizeObjectKey(value) {
+  const key = String(value || "").replace(/^\/+/, "");
+  if (!key || key.includes("..") || /[\x00-\x1f]/.test(key))
+    throw Object.assign(Error("目标 Key 不能为空且不能包含 .. 或控制字符"), {
+      status: 400,
+      code: "invalid_object_key",
+    });
+  return key;
+}
+function resolveDestinationKey(prefix, rawKey) {
+  const clean = normalizeObjectKey(rawKey);
+  const trimmedPrefix = String(prefix || "").replace(/^\/+|\/+$/g, "");
+  return trimmedPrefix ? `${trimmedPrefix}/${clean}` : clean;
 }
 const savedStorageConfig = providerKeyStore.get("__object_storage_config__");
 if (savedStorageConfig) {
@@ -2557,6 +2600,8 @@ async function api(req, res, url) {
           bucket: process.env[keys.bucket] || "",
           prefix: process.env[keys.prefix] || "",
           region: process.env[keys.region] || "",
+          accessKeyId: process.env[keys.accessKeyId] || "",
+          secretAccessKey: process.env[keys.secretAccessKey] || "",
           accessKeySuffix: process.env[keys.accessKeyId]?.slice(-4) || "",
         },
       ]),
@@ -2618,6 +2663,167 @@ async function api(req, res, url) {
     providerKeyStore.set("__object_storage_config__", JSON.stringify(config));
     applyStorageConfig(config);
     return json(res, 200, { configured: true, primaryProvider });
+  }
+  const uploadCreate = req.method === "POST" && url.pathname === "/api/storage/uploads";
+  if (uploadCreate) {
+    const d = await body(req),
+      providerId = String(d.provider || process.env.STORAGE_PRIMARY_PROVIDER || "r2"),
+      config = storageProviderConfig(providerId);
+    if (!config)
+      throw Object.assign(Error("所选对象存储未启用或配置不完整"), {
+        status: 409,
+        code: "storage_not_configured",
+      });
+    const fileSize = Number(d.fileSize);
+    if (!Number.isFinite(fileSize) || fileSize <= 0)
+      throw Object.assign(Error("文件大小无效"), { status: 400, code: "invalid_file_size" });
+    const key = resolveDestinationKey(config.prefix, d.key),
+      uploadId = String(d.uploadId || ""),
+      partSize = objectStorage.choosePartSize(fileSize),
+      partCount = Math.ceil(fileSize / partSize);
+    // Resume path: reconcile against the authoritative state on the bucket.
+    if (uploadId && /^[a-zA-Z0-9._-]+$/.test(uploadId)) {
+      const client = objectStorage.createClient(config);
+      let existing = [];
+      try {
+        existing = await objectStorage.listParts(client, config.bucket, key, uploadId);
+      } catch (error) {
+        // Upload gone (completed/aborted/expired): start a fresh one below.
+        throw Object.assign(Error("该上传已失效，请重新开始"), {
+          status: 410,
+          code: "upload_not_found",
+        });
+      }
+      return json(res, 200, {
+        provider: providerId,
+        bucket: config.bucket,
+        key,
+        uploadId,
+        partSize,
+        partCount,
+        uploadedParts: existing,
+      });
+    }
+    const client = objectStorage.createClient(config),
+      newUploadId = await objectStorage.beginMultipart(
+        client,
+        config.bucket,
+        key,
+        String(d.contentType || "application/octet-stream"),
+      );
+    activeUploads.set(newUploadId, {
+      provider: providerId,
+      key,
+      fileSize,
+      partSize,
+      createdAt: Date.now(),
+    });
+    return json(res, 200, {
+      provider: providerId,
+      bucket: config.bucket,
+      key,
+      uploadId: newUploadId,
+      partSize,
+      partCount,
+      uploadedParts: [],
+    });
+  }
+  const uploadPartRoute = url.pathname.match(
+    /^\/api\/storage\/uploads\/([a-zA-Z0-9._-]+)\/parts\/(\d+)$/,
+  );
+  if (req.method === "PUT" && uploadPartRoute) {
+    const uploadId = uploadPartRoute[1],
+      partNumber = Number(uploadPartRoute[2]),
+      record = activeUploads.get(uploadId),
+      providerId = String(record?.provider || process.env.STORAGE_PRIMARY_PROVIDER || "r2"),
+      key = String(url.searchParams.get("key") || record?.key || ""),
+      config = storageProviderConfig(providerId);
+    if (!config)
+      throw Object.assign(Error("所选对象存储未启用或配置不完整"), {
+        status: 409,
+        code: "storage_not_configured",
+      });
+    if (!partNumber || partNumber < 1 || partNumber > 10000)
+      throw Object.assign(Error("分片编号无效"), { status: 400 });
+    const client = objectStorage.createClient(config),
+      length = Number(req.headers["content-length"] || 0);
+    // The request body is streamed straight into UploadPart: browser chunk ->
+    // platform -> bucket, no temp file and bounded memory (~one part in flight).
+    const etag = await objectStorage.uploadPart(
+      client,
+      config.bucket,
+      key,
+      uploadId,
+      partNumber,
+      req,
+      length,
+    );
+    return json(res, 200, { partNumber, etag });
+  }
+  const uploadComplete = url.pathname.match(
+    /^\/api\/storage\/uploads\/([a-zA-Z0-9._-]+)\/complete$/,
+  );
+  if (req.method === "POST" && uploadComplete) {
+    const uploadId = uploadComplete[1],
+      d = await body(req),
+      record = activeUploads.get(uploadId),
+      providerId = String(d.provider || record?.provider || process.env.STORAGE_PRIMARY_PROVIDER || "r2"),
+      key = String(d.key || record?.key || ""),
+      config = storageProviderConfig(providerId);
+    if (!config)
+      throw Object.assign(Error("所选对象存储未启用或配置不完整"), {
+        status: 409,
+        code: "storage_not_configured",
+      });
+    const client = objectStorage.createClient(config),
+      parts = await objectStorage.listParts(client, config.bucket, key, uploadId);
+    if (!parts.length)
+      throw Object.assign(Error("没有已上传的分片可完成"), {
+        status: 400,
+        code: "no_parts",
+      });
+    const location = await objectStorage.completeMultipart(
+      client,
+      config.bucket,
+      key,
+      uploadId,
+      parts,
+    );
+    activeUploads.delete(uploadId);
+    return json(res, 200, { ok: true, key, bucket: config.bucket, location });
+  }
+  const uploadAbort = url.pathname.match(
+    /^\/api\/storage\/uploads\/([a-zA-Z0-9._-]+)$/,
+  );
+  if (req.method === "DELETE" && uploadAbort) {
+    const uploadId = uploadAbort[1],
+      d = await body(req).catch(() => ({})),
+      record = activeUploads.get(uploadId),
+      providerId = String(d.provider || record?.provider || process.env.STORAGE_PRIMARY_PROVIDER || "r2"),
+      key = String(d.key || record?.key || ""),
+      config = storageProviderConfig(providerId);
+    if (config) {
+      try {
+        await objectStorage.abortMultipart(
+          objectStorage.createClient(config),
+          config.bucket,
+          key,
+          uploadId,
+        );
+      } catch (error) {
+        // Best effort: clear local state even if the bucket call fails.
+      }
+    }
+    activeUploads.delete(uploadId);
+    return json(res, 200, { ok: true, aborted: uploadId });
+  }
+  if (req.method === "GET" && url.pathname === "/api/storage/uploads") {
+    return json(res, 200, {
+      uploads: [...activeUploads.entries()].map(([uploadId, record]) => ({
+        uploadId,
+        ...record,
+      })),
+    });
   }
   const storageApply = url.pathname.match(
     /^\/api\/instances\/([^/]+)\/object-storage$/,
@@ -2741,7 +2947,7 @@ async function api(req, res, url) {
     if (!definition || !adapter)
       throw Object.assign(Error("未知供应商"), { status: 404 });
     const d = await body(req),
-      status = providerKeyStore.add(id, d.apiKey);
+      status = providerKeyStore.add(id, d.apiKey, d.label);
     billingStore.bindProviderCredential(id, status.id);
     process.env[definition.env] = String(d.apiKey).trim();
     adapter.token = process.env[definition.env];
@@ -2829,6 +3035,20 @@ async function api(req, res, url) {
     adapter.token = active;
     adapter.env[definition.env] = active;
     return json(res, 200, { activated: true, ...providerKeyStore.status(id) });
+  }
+  const keyRenameMatch = url.pathname.match(
+    /^\/api\/providers\/([^/]+)\/api-keys\/([^/]+)\/rename$/,
+  );
+  if (keyRenameMatch && req.method === "POST") {
+    const id = decodeURIComponent(keyRenameMatch[1]),
+      keyId = decodeURIComponent(keyRenameMatch[2]),
+      definition = providerDefinitions[id];
+    if (!definition)
+      throw Object.assign(Error("未知供应商"), { status: 404 });
+    const d = await body(req);
+    if (!providerKeyStore.renameKey(id, keyId, d.label))
+      throw Object.assign(Error("API Key 不存在"), { status: 404 });
+    return json(res, 200, { renamed: true, ...providerKeyStore.status(id) });
   }
   if (
     req.method === "GET" &&

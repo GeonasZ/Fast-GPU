@@ -1,4 +1,4 @@
-const $ = (s) => document.querySelector(s);
+﻿const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const esc = (s) =>
   String(s ?? "").replace(
@@ -1049,7 +1049,11 @@ function go(view) {
   updateProviderConnectionSummary(view);
   if (view === "funds")
     loadProviderConfig().then(() => showBillingProvider(activeBillingProvider));
-  if (view === "storage") loadS3Config();
+  if (view === "storage") {
+    loadS3Config();
+  } else {
+    setPageTitleAlert(null);
+  }
   if (view === "settings") loadPlatformSettings();
 }
 $$("nav button").forEach((b) => (b.onclick = () => go(b.dataset.view)));
@@ -1156,7 +1160,7 @@ function renderProviderKeys(provider, status) {
   $("#providerKeyList").innerHTML = keys
     .map(
       (key) =>
-        `<div class="provider-key-item ${key.active ? "active" : ""}"><span><code>•••• ${esc(key.keySuffix)}</code><small>${key.active ? "当前使用" : "备用"} · ${new Date(key.createdAt).toLocaleDateString()}</small></span><div>${key.active ? "<b>使用中</b>" : `<button type="button" data-activate-provider-key="${esc(key.id)}">切换使用</button>`}<button type="button" data-download-provider-key="${esc(key.id)}">安全下载</button><button type="button" data-delete-provider-key="${esc(key.id)}">删除</button></div></div>`,
+        `<div class="provider-key-item ${key.active ? "active" : ""}"><span><strong class="provider-key-label">${esc(key.label || "未命名 Key")}</strong><code>•••• ${esc(key.keySuffix)}</code><small>${key.active ? "当前使用" : "备用"} · ${new Date(key.createdAt).toLocaleDateString()}</small></span><div>${key.active ? "<b>使用中</b>" : `<button type="button" data-activate-provider-key="${esc(key.id)}">切换使用</button>`}<button type="button" data-rename-provider-key="${esc(key.id)}">重命名</button><button type="button" data-download-provider-key="${esc(key.id)}">安全下载</button><button type="button" data-delete-provider-key="${esc(key.id)}">删除</button></div></div>`,
     )
     .join("");
   form.hidden = keys.length > 0;
@@ -1225,6 +1229,28 @@ function renderProviderKeys(provider, status) {
         } catch (error) {
           button.disabled = false;
           toast("删除失败：" + error.message);
+        }
+      }),
+  );
+  $$("[data-rename-provider-key]").forEach(
+    (button) =>
+      (button.onclick = async () => {
+        const item = button.closest(".provider-key-item");
+        const current = item.querySelector(".provider-key-label").textContent.trim();
+        const label = prompt("为这个 Key 起个名字（备注）：", current === "未命名 Key" ? "" : current);
+        if (label === null) return;
+        button.disabled = true;
+        try {
+          await request(
+            `/api/providers/${encodeURIComponent(provider.id)}/api-keys/${encodeURIComponent(button.dataset.renameProviderKey)}/rename`,
+            { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ label: label.trim() }) },
+          );
+          await loadProviderConfig();
+          await showBillingProvider(provider.id);
+          toast(label.trim() ? `已更新名称为「${label.trim()}」` : "已清空 Key 名称");
+        } catch (error) {
+          button.disabled = false;
+          toast("重命名失败：" + error.message);
         }
       }),
   );
@@ -1456,6 +1482,7 @@ $("#providerKeyForm").onsubmit = async (event) => {
   event.preventDefault();
   const provider = billingProviders.find((x) => x.id === activeBillingProvider),
     apiKey = $("#providerApiKey").value.trim(),
+    label = $("#providerApiKeyLabel").value.trim(),
     button = event.currentTarget.querySelector("button");
   if (!apiKey) return toast("请先粘贴 API Key");
   button.disabled = true;
@@ -1463,8 +1490,10 @@ $("#providerKeyForm").onsubmit = async (event) => {
     await request(`/api/providers/${encodeURIComponent(provider.id)}/api-key`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ apiKey }),
+      body: JSON.stringify({ apiKey, label }),
     });
+    $("#providerApiKey").value = "";
+    $("#providerApiKeyLabel").value = "";
     await loadProviderConfig();
     await showBillingProvider(provider.id);
     toast(
@@ -4183,6 +4212,33 @@ for (const field of [
     input.placeholder = field.placeholder;
     input.setAttribute("aria-label", field.description);
   }
+
+// <legend> renders in the fieldset border region, so the card header floats
+// over the card edge. Promote it to a normal grid item that lives inside the
+// padded card, and give each provider card its own save button.
+function normalizeStorageCards() {
+  document.querySelectorAll("[data-storage-provider]").forEach((card) => {
+    const legend = card.querySelector(":scope > legend");
+    if (legend) {
+      const head = document.createElement("div");
+      head.className = "s3-legend" + (legend.className ? " " + legend.className : "");
+      while (legend.firstChild) head.append(legend.firstChild);
+      legend.replaceWith(head);
+    }
+    if (!card.querySelector(":scope > .s3-card-actions")) {
+      const footer = document.createElement("div");
+      footer.className = "s3-card-actions";
+      const save = document.createElement("button");
+      save.type = "submit";
+      save.className = "primary";
+      save.textContent = "保存";
+      footer.append(save);
+      card.append(footer);
+    }
+  });
+}
+normalizeStorageCards();
+
 for (const provider of [
   {
     id: "r2",
@@ -4198,7 +4254,7 @@ for (const provider of [
   },
 ]) {
   const legend = document.querySelector(
-      `[data-storage-provider="${provider.id}"] legend`,
+      `[data-storage-provider="${provider.id}"] .s3-legend`,
     ),
     toggle = legend.querySelector(".storage-toggle"),
     actions = document.createElement("span"),
@@ -4348,54 +4404,71 @@ function updateStoragePrimaryOptions() {
   select.disabled = false;
   if (!valid.includes(select.value)) select.value = valid[0];
 }
-async function loadS3Config() {
-  try {
-    const [c] = await Promise.all([
-      request("/api/storage/providers"),
-      loadExistingStorageInstances(),
-    ]);
-    for (const [provider, fields] of Object.entries(storageProviderFields)) {
-      const item = c.providers?.[provider] || {};
-      $(fields.enabled).checked = Boolean(item.enabled);
-      $(fields.endpoint).value = item.endpoint || "";
-      $(fields.bucket).value = item.bucket || "";
-      $(fields.prefix).value = item.prefix || "";
-      if (
-        item.region &&
-        ![...$(fields.region).options].some(
-          (option) => option.value === item.region,
-        )
-      ) {
-        $(fields.region).add(
-          new Option(`${item.region}（已保存）`, item.region),
-        );
-      }
-      $(fields.region).value = item.region || (provider === "r2" ? "auto" : "");
-      $(fields.accessKey).value = "";
-      $(fields.secretKey).value = "";
-      $(fields.accessKey).placeholder = item.accessKeySuffix
-        ? `已保存 ····${item.accessKeySuffix}，留空则保留`
-        : "Access Key ID";
-     $(fields.hint).textContent = item.configured
-       ? `已保存 Bucket：${item.bucket}`
-       : "尚未配置";
-      storageProviderConfigured[provider] = Boolean(item.configured);
-    }
-    $("#storagePrimary").value = c.primaryProvider || "r2";
-    updateStoragePrimaryOptions();
-    const enabled = Object.values(c.providers || {}).filter(
-      (item) => item.enabled && item.configured,
-    ).length;
-    $("#s3Status").className = "pill " + (enabled ? "ready" : "stopped");
-    $("#s3Status").textContent = enabled ? `已启用 ${enabled} 个` : "尚未配置";
-    $("#s3Hint").textContent = enabled
-      ? "两套配置都会下发，主存储负责首次数据同步。"
-      : "至少启用并完整配置一个供应商。";
-    for (const [provider, fields] of Object.entries(storageProviderFields))
-      $(`#existingStorageProvider option[value="${provider}"]`).disabled = !$(fields.enabled).checked;
-  } catch (error) {
-    toast("读取对象存储设置失败：" + error.message);
+function setPageTitleAlert(text) {
+  const alert = $("#pageTitleAlert");
+  if (!alert) return;
+  if (!text) {
+    alert.hidden = true;
+    return;
   }
+  alert.textContent = text;
+  alert.hidden = false;
+}
+async function loadS3Config() {
+  let c;
+  try {
+    c = await request("/api/storage/providers");
+  } catch (error) {
+    // 无法读取存储配置属于真正的异常，仍然提示；但不打扰未配置的正常状态
+    toast("读取对象存储设置失败：" + error.message);
+    setPageTitleAlert("存储配置读取失败");
+    return;
+  }
+  // 实例列表加载失败不应阻塞存储设置页面（例如尚未配置任何算力供应商时）
+  try {
+    await loadExistingStorageInstances();
+  } catch (_instanceError) {
+    $("#existingStorageInstance").innerHTML = '<option value="">请先启动实例</option>';
+  }
+  for (const [provider, fields] of Object.entries(storageProviderFields)) {
+    const item = c.providers?.[provider] || {};
+    $(fields.enabled).checked = Boolean(item.enabled);
+    $(fields.endpoint).value = item.endpoint || "";
+    $(fields.bucket).value = item.bucket || "";
+    $(fields.prefix).value = item.prefix || "";
+    if (
+      item.region &&
+      ![...$(fields.region).options].some(
+        (option) => option.value === item.region,
+      )
+    ) {
+      $(fields.region).add(
+        new Option(`${item.region}（已保存）`, item.region),
+      );
+    }
+    $(fields.region).value = item.region || (provider === "r2" ? "auto" : "");
+   $(fields.accessKey).value = item.accessKeyId || "";
+   $(fields.secretKey).value = item.secretAccessKey || "";
+  $(fields.accessKey).placeholder = "S3 Access Key ID";
+ $(fields.hint).textContent = item.configured
+     ? `已保存 Bucket：${item.bucket}`
+     : "尚未配置";
+    storageProviderConfigured[provider] = Boolean(item.configured);
+  }
+ $("#storagePrimary").value = c.primaryProvider || "r2";
+ updateStoragePrimaryOptions();
+ updateStorageUploadProviders(c.providers || {});
+ const enabled = Object.values(c.providers || {}).filter(
+    (item) => item.enabled && item.configured,
+  ).length;
+  $("#s3Status").className = "pill " + (enabled ? "ready" : "warning");
+  $("#s3Status").textContent = enabled ? `已启用 ${enabled} 个` : "尚未配置";
+  setPageTitleAlert(enabled ? null : "注意：未配置");
+  $("#s3Hint").textContent = enabled
+    ? "两套配置都会下发，主存储负责首次数据同步。"
+    : "尚未配置任何对象存储供应商，下方可随时填写并保存。";
+  for (const [provider, fields] of Object.entries(storageProviderFields))
+    $(`#existingStorageProvider option[value="${provider}"]`).disabled = !$(fields.enabled).checked;
 }
 for (const fields of Object.values(storageProviderFields))
   $(fields.enabled).onchange = updateStoragePrimaryOptions;
@@ -4539,7 +4612,8 @@ function createSearchableSelect(select) {
 createSearchableSelect($("#ossRegion"));
 $("#s3Form").onsubmit = async function (event) {
   event.preventDefault();
-  const button = event.currentTarget.querySelector("button");
+  const button =
+    event.submitter || event.currentTarget.querySelector("button[type=submit]");
   setButtonBusy(button, "保存中…");
   try {
     const providers = Object.fromEntries(

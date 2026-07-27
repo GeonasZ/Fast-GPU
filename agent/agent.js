@@ -1,3 +1,4 @@
+
 const http=require('node:http'),{execFile,execFileSync}=require('node:child_process'),fs=require('node:fs'),path=require('node:path');
 const run=(cmd,args,timeout=120000,signal)=>new Promise(resolve=>{let child;const stop=()=>{if(!child?.pid)return;try{process.kill(-child.pid,'SIGTERM')}catch{}setTimeout(()=>{try{process.kill(-child.pid,'SIGKILL')}catch{}},1500).unref()};child=execFile(cmd,args,{timeout,maxBuffer:8e6,detached:process.platform!=='win32'},(error,stdout,stderr)=>{signal?.removeEventListener('abort',stop);resolve({ok:!error,aborted:Boolean(signal?.aborted),stdout:String(stdout).trim(),stderr:String(stderr).trim()})});signal?.addEventListener('abort',stop,{once:true});if(signal?.aborted)stop()});
 const throwIfAborted=signal=>{if(signal?.aborted)throw Object.assign(Error('性能测试已停止'),{code:'benchmark_cancelled'})};
