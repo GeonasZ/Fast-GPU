@@ -4,6 +4,10 @@ export DEBIAN_FRONTEND=noninteractive
 install -d -m 0755 /opt/fast-gpu /var/lib/fast-gpu /data/datasets/fineweb
 start_existing_agent() {
   [[ -f /opt/fast-gpu/agent.js ]] || return 0
+  if ! command -v node >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y --no-install-recommends nodejs ca-certificates
+  fi
   command -v node >/dev/null 2>&1 || return 0
   pgrep -f '[n]ode /opt/fast-gpu/agent.js' >/dev/null 2>&1 && return 0
   nohup node /opt/fast-gpu/agent.js >>/var/log/fast-gpu-agent.log 2>&1 &
@@ -139,6 +143,9 @@ elif [[ -s /opt/fast-gpu/agent.js ]]; then
 elif [[ -n "${BASE_URL:-}" ]]; then
   curl -fsSL "${BASE_URL%/}/provision/agent.js" -o /opt/fast-gpu/agent.js
 fi
+# The initial start check runs before a remotely fetched agent is available.
+# Run it again after installation so fresh instances start the listener too.
+start_existing_agent
 configure_storage_remote() {
   local name="$1" endpoint="$2" access_key="$3" secret_key="$4" region="${5:-}"
   local args=(config create "$name" s3 provider Other endpoint "$endpoint" access_key_id "$access_key" secret_access_key "$secret_key" env_auth false)

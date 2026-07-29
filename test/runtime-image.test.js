@@ -214,6 +214,8 @@ test('managed SSH remains available when agent telemetry is unavailable', () => 
   assert.match(app, /showNamedTunnelHelp/);
   assert.match(app, /保存并测试/);
   assert.match(server, /function removeTemporaryFile/);
+  assert.ok(server.includes("`${account}:(F)`"));
+  assert.ok(!server.includes("`${account}:(R)`"));
   assert.match(server, /reinjectTelemetryAgent/);
   assert.match(server, /operation\s*===\s*["']start["']/);
   assert.match(server, /agent\.env/);
@@ -288,6 +290,8 @@ test('provider-side deletion and startup reconciliation purge stale instance art
   assert.match(server, /failedProviders\.has/);
   assert.match(server, /Never destroy durable SSH keys based/);
   assert.match(server, /confirmedMissing = deleteConfirmed \|\| billing\?\.status === "terminated"/);
+  assert.ok(!server.includes("删除前断开对象存储失败"));
+  assert.ok(!server.includes('mountpoint -q "$target"'));
   assert.match(server, /启动后实例与凭据对账失败/);
 });
 

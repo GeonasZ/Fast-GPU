@@ -43,6 +43,24 @@ test("instance cards have one status derivation and no legacy status writer", ()
   assert.doesNotMatch(sshTransfer, /applyInstanceLifecycleLabels/);
 });
 
+test("an open SSH window follows refreshed instance connection state", () => {
+  const fs = require("node:fs");
+  const root = path.join(__dirname, "..");
+  const instancesPage = fs.readFileSync(
+    path.join(root, "public", "instances-page.js"),
+    "utf8",
+  );
+  const sshTransfer = fs.readFileSync(
+    path.join(root, "public", "ssh-transfer.js"),
+    "utf8",
+  );
+
+  assert.match(instancesPage, /syncOpenSshWindow\(\)/);
+  assert.match(sshTransfer, /async function syncOpenSshWindow\(\)/);
+  assert.match(sshTransfer, /if \(!instance\.sshReady\)/);
+  assert.match(sshTransfer, /renderReadySshWindow\(ssh, instance\)/);
+});
+
 test("provider inventory cleanup never treats durable keypairs as instances", () => {
   const server = require("node:fs").readFileSync(
     path.join(__dirname, "..", "server.js"),

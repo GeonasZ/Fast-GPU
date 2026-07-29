@@ -73,6 +73,31 @@ test('credential store rejects missing or incorrect encryption keys and port 22'
   }
 });
 
+test('SSH credentials retain an assigned external port when first saved', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-ssh-port-'));
+  const filename = path.join(directory, 'fleet.sqlite');
+  try {
+    const store = createCredentialStore(environment(filename));
+    const key = store.ssh.createKey();
+    store.ssh.save('vm-42', {
+      provider: 'hyperstack',
+      username: 'ubuntu',
+      publicKey: key.publicKey,
+      privateKey: key.privateKey,
+      internalPort: 31415,
+      externalPort: 31415,
+    });
+    assert.equal(store.ssh.get('hyperstack', 'vm-42').externalPort, 31415);
+    store.close();
+
+    const reopened = createCredentialStore(environment(filename));
+    assert.equal(reopened.ssh.get('hyperstack', 'vm-42').externalPort, 31415);
+    reopened.close();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('removed instances leave no active credentials or telemetry history', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-instance-purge-'));
   const filename = path.join(directory, 'fleet.sqlite');

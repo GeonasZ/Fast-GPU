@@ -119,6 +119,69 @@ function sshLayerNotice(message, type = "error") {
   notice.className = `ssh-layer-notice ${type}`;
   notice.hidden = !message;
 }
+const scpPanel = $("[data-transfer-panel='scp']");
+scpPanel.insertAdjacentHTML("afterbegin", '<div class="scp-direction" role="group" aria-label="SCP 传输方向"><button type="button" class="active" data-scp-direction="upload">本地 → 云端</button><button type="button" data-scp-direction="download">云端 → 本地</button></div><div id="scpDownloadControls" class="scp-download-controls" hidden><p class="transfer-help">从云端选择一个文件，再使用系统文件选择器决定本地保存目录。</p><label class="remote-path-field"><span>云端源文件</span><input id="scpDownloadRemotePath" value="/data/uploads" aria-label="云端源文件"><button type="button" id="browseScpDownloadRemote">选择文件</button></label><label class="local-download-field"><span>本地保存目录</span><input id="scpDownloadLocalDir" readonly placeholder="请选择本地文件夹" aria-label="本地保存目录"><button type="button" id="browseScpDownloadDir">选择目录</button></label><button type="button" id="downloadScpFile">下载文件</button><small id="scpDownloadSummary" class="scp-download-summary"></small></div>');
+const scpRemotePicker = document.createElement("dialog");
+scpRemotePicker.id = "scpRemotePicker";
+scpRemotePicker.innerHTML = '<form method="dialog" class="local-picker"><header><strong>选择云端文件</strong><button value="cancel" aria-label="关闭">×</button></header><div class="local-picker-path"><button type="button" id="scpPickerUp">上一级</button><code id="scpPickerPath"></code></div><div id="scpPickerEntries" class="local-picker-entries"></div><footer><button value="cancel">取消</button></footer></form>';
+document.body.append(scpRemotePicker);
+let scpDirection = "upload", scpPickerDirectory = "/";
+const scpDirectoryCache = new Map();
+function renderScpDirectoryPicker(listing) {
+  if (!listing || listing.error) { $("#scpPickerEntries").textContent = listing?.error || "无法读取目录"; return; }
+  scpDirectoryCache.set(listing.path, listing);
+  scpPickerDirectory = listing.path;
+  $("#scpPickerPath").textContent = listing.path;
+  $("#scpPickerUp").disabled = !listing.parent;
+  $("#scpPickerEntries").innerHTML = listing.entries.length ? listing.entries.map((entry) => entry.directory ? `<button type="button" data-scp-picker-directory="${esc(entry.path)}"><span>文件夹</span>${esc(entry.name)}</button>` : `<button type="button" data-scp-picker-file="${esc(entry.path)}"><span>文件</span>${esc(entry.name)}</button>`).join("") : "<small>此目录为空</small>";
+  listing.entries.filter((entry) => entry.directory).forEach((entry) => void prefetchScpDirectory(entry.path));
+}
+async function openScpDirectory(directory) {
+  const cached = scpDirectoryCache.get(directory);
+  if (cached) return renderScpDirectoryPicker(cached);
+  $("#scpPickerEntries").textContent = "正在读取目录…";
+  const instance = currentSshConnection?.instance;
+  if (!instance) return renderScpDirectoryPicker({ error: "SSH 连接尚未准备好" });
+  try {
+    renderScpDirectoryPicker(await request(`/api/instances/${encodeURIComponent(instance.id)}/files/list?provider=${encodeURIComponent(instance.provider)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: directory }) }));
+  } catch (error) { renderScpDirectoryPicker({ error: error.message }); }
+}
+async function prefetchScpDirectory(directory) {
+  if (scpDirectoryCache.has(directory)) return;
+  const instance = currentSshConnection?.instance;
+  if (!instance) return;
+  try { scpDirectoryCache.set(directory, await request(`/api/instances/${encodeURIComponent(instance.id)}/files/list?provider=${encodeURIComponent(instance.provider)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: directory }) })); } catch {}
+}
+function updateScpDirection(direction) {
+  scpDirection = direction;
+  $$('[data-scp-direction]').forEach((button) => button.classList.toggle("active", button.dataset.scpDirection === direction));
+  $("#scpDropZone").hidden = direction === "download";
+  $("#scpSelectionTree").hidden = direction === "download" || !selectedScpFiles.length;
+  $(".transfer-destination").hidden = direction === "download";
+  $("#scpRemoteDirHint").hidden = direction === "download";
+  const compressToggle = $("#scpCompress")?.closest("label");
+  if (compressToggle) compressToggle.hidden = direction === "download";
+  $("#scpDownloadControls").hidden = direction !== "download";
+}
+$$('[data-scp-direction]').forEach((button) => (button.onclick = () => updateScpDirection(button.dataset.scpDirection)));
+$("#browseScpDownloadDir").onclick = async () => {
+  const localDirectory = await window.fastGpuWindow?.pickDirectory?.();
+  if (localDirectory) $("#scpDownloadLocalDir").value = localDirectory;
+};
+$("#browseScpDownloadRemote").onclick = async () => { scpRemotePicker.showModal(); await openScpDirectory(scpPickerDirectory || "/"); };
+$("#scpPickerUp").onclick = () => { const parent = scpDirectoryCache.get(scpPickerDirectory)?.parent; if (parent) void openScpDirectory(parent); };
+$("#scpPickerEntries").onclick = (event) => { const button = event.target.closest("button"); if (button?.dataset.scpPickerDirectory) void openScpDirectory(button.dataset.scpPickerDirectory); if (button?.dataset.scpPickerFile) { $("#scpDownloadRemotePath").value = button.dataset.scpPickerFile; scpRemotePicker.close(); } };
+$("#downloadScpFile").onclick = async function () {
+  const remotePath = $("#scpDownloadRemotePath").value.trim(), localDirectory = $("#scpDownloadLocalDir").value.trim();
+  if (!remotePath || !localDirectory) return sshLayerNotice("请填写云端文件路径并选择本地保存目录。");
+  if (!currentSshConnection?.instance) return sshLayerNotice("SSH 连接尚未准备好。");
+  setButtonBusy(this, "下载中…"); $("#scpDownloadSummary").textContent = "正在从云端下载…";
+  try {
+    const result = await request(`/api/instances/${encodeURIComponent(currentSshConnection.instance.id)}/files/download?provider=${encodeURIComponent(currentSshConnection.instance.provider)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ remotePath, localDirectory }) });
+    $("#scpDownloadSummary").textContent = `已下载到 ${result.localPath}`; sshLayerNotice("文件下载完成。", "success");
+  } catch (error) { $("#scpDownloadSummary").textContent = "下载失败：" + error.message; sshLayerNotice("下载失败：" + error.message); }
+  finally { clearButtonBusy(this); }
+};
 const sshWindowBar = $(".ssh-window-bar");
 sshWindowBar.onclick = (event) => {
   const action = event.target.closest("[data-ssh-window]")?.dataset.sshWindow;
@@ -483,6 +546,8 @@ loadClientCapabilities = async function () {
   $("#openSshTerminal").disabled = !sshReady || !connectionReady;
   $("#uploadScpFile").disabled =
     !sshReady || !currentSshConnection?.instance?.sshReady;
+  $("#downloadScpFile").disabled =
+    !local || !sshReady || !currentSshConnection?.instance?.sshReady;
 };
 loadClientCapabilities();
 async function installRsync(scope, button) {
@@ -568,6 +633,90 @@ async function waitForSshConnection(instance) {
     }
   }
 }
+let sshWindowRefreshKey = "";
+function renderPendingSshWindow(instance, message) {
+  const powered = ["provisioning", "running"].includes(instance?.providerState),
+    keyDownloadUrl = instance?.platformManaged
+      ? `/api/instances/${encodeURIComponent(instance.id)}/ssh/key?provider=${encodeURIComponent(instance.provider)}`
+      : "",
+    identityFile = `fast-gpu-${instance?.provider || "instance"}-${instance?.id || "unknown"}`.replace(
+      /[^a-z0-9._-]/gi,
+      "_",
+    ) + ".pem";
+  currentSshCommand = "";
+  currentSshConnection = {
+    instance,
+    keyDownloadUrl,
+    identityFile,
+    terminalAvailable: false,
+  };
+  $("#sshConnectionDetails").innerHTML =
+    '<div class="ssh-pending-state"><strong>' +
+    (powered ? "SSH 正在准备中" : "SSH 当前不可用") +
+    "</strong><small>" +
+    esc(message || (powered
+      ? "实例入口就绪后即可打开平台终端，请稍候。"
+      : "实例开机且 SSH 连接恢复后，此窗口将自动更新。")) +
+    "</small></div>";
+  $("#sshKeyDownload").hidden = !keyDownloadUrl;
+  $("#copySshCommand").disabled = true;
+  $("#openSshTerminal").hidden = false;
+  $("#openSshTerminal").disabled = true;
+  $("#uploadScpFile").disabled = true;
+  $("#downloadScpFile").disabled = true;
+}
+function renderReadySshWindow(ssh, instance) {
+  currentSshCommand = ssh.command;
+  currentSshConnection = { ...ssh, instance };
+  const credential = ssh.managed
+    ? '<div class="ssh-field"><span>认证</span><code>托管私钥（已加密保存）</code></div>'
+    : '<div class="ssh-field"><span>密码</span><code>' + esc(ssh.password) + "</code></div>";
+  $("#sshConnectionDetails").innerHTML =
+    '<div class="ssh-field"><span>地址</span><strong>' + esc(ssh.host) + ":" + esc(ssh.port) +
+    '</strong></div><div class="ssh-field"><span>账号</span><strong>' + esc(ssh.username) +
+    "</strong></div>" + credential + '<div class="ssh-command"><code>' + esc(ssh.command) + "</code></div>";
+  $("#sshKeyDownload").hidden = !ssh.keyDownloadUrl;
+  $("#copySshCommand").disabled = false;
+  $("#openSshTerminal").hidden = false;
+  $("#openSshTerminal").disabled =
+    !ssh.terminalAvailable || (clientCapabilities.mode === "local" && !clientCapabilities.ssh);
+  $("#uploadScpFile").disabled = clientCapabilities.mode === "local" && !clientCapabilities.ssh;
+  $("#downloadScpFile").disabled = clientCapabilities.mode !== "local" || !clientCapabilities.ssh;
+  updateSyncCommand();
+}
+async function syncOpenSshWindow() {
+  if (!sshDialog.open || !currentSshConnection?.instance) return;
+  const previous = currentSshConnection.instance,
+    instance = instances.find((item) =>
+      String(item.id) === String(previous.id) && item.provider === previous.provider,
+    );
+  if (!instance) {
+    sshWindowRefreshKey = "";
+    renderPendingSshWindow(previous, "实例已不存在，SSH 连接信息已失效。");
+    return;
+  }
+  if (!instance.sshReady) {
+    sshWindowRefreshKey = "";
+    if (previous.sshReady || currentSshConnection.host) renderPendingSshWindow(instance);
+    else currentSshConnection.instance = instance;
+    return;
+  }
+  currentSshConnection.instance = instance;
+  if (currentSshConnection.host) return;
+  const refreshKey = `${instance.provider}:${instance.id}`;
+  if (sshWindowRefreshKey === refreshKey) return;
+  sshWindowRefreshKey = refreshKey;
+  try {
+    const ssh = await waitForSshConnection(instance);
+    if (!sshDialog.open || sshWindowRefreshKey !== refreshKey) return;
+    renderReadySshWindow(ssh, instance);
+  } catch (error) {
+    if (sshDialog.open && sshWindowRefreshKey === refreshKey)
+      renderPendingSshWindow(instance, "SSH 连接信息刷新失败：" + error.message);
+  } finally {
+    if (sshWindowRefreshKey === refreshKey) sshWindowRefreshKey = "";
+  }
+}
 function decorateSshButtons() {
   document.querySelectorAll(".instance").forEach(function (card) {
     const id = card.querySelector("[data-action]")?.dataset.id,
@@ -635,6 +784,7 @@ document.addEventListener("click", async function (event) {
    $("#openSshTerminal").hidden = false;
    $("#openSshTerminal").disabled = true;
    $("#uploadScpFile").disabled = true;
+   $("#downloadScpFile").disabled = true;
    sshDialog.showModal();
    return;
  }
@@ -668,6 +818,9 @@ document.addEventListener("click", async function (event) {
       (clientCapabilities.mode === "local" && !clientCapabilities.ssh);
     $("#uploadScpFile").disabled =
       clientCapabilities.mode === "local" && !clientCapabilities.ssh;
+    $("#downloadScpFile").disabled =
+      clientCapabilities.mode !== "local" ||
+      !clientCapabilities.ssh;
     updateSyncCommand();
     sshDialog.showModal();
   } catch (error) {

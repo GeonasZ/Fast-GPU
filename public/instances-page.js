@@ -138,9 +138,18 @@ function showTransitionStates() {
     const pending = pendingInstanceActions.get(String(i.id)),
       state = instanceVisualStatus(i, pending?.action);
     if (!["stopping", "starting", "terminating"].includes(state)) continue;
-    const button = $(`[data-action][data-id="${CSS.escape(String(i.id))}"]`),
-      pill = button?.closest(".instance")?.querySelector(".pill"),
+    const actionButtons = article?.querySelectorAll("[data-action]") || [],
+      button = article?.querySelector(
+        state === "terminating"
+          ? '[data-action="delete"]'
+          : '[data-action]:not([data-action="delete"])',
+      ),
+      pill = article?.querySelector(".pill"),
       label = instanceStatusLabel(state);
+    if (state === "terminating")
+      actionButtons.forEach((actionButton) => {
+        actionButton.disabled = true;
+      });
     if (button) {
       button.disabled = true;
       // “正在停止”已经由右上角状态标识表达；按钮保留“启动”文案，
@@ -315,17 +324,29 @@ function instanceBenchmarkResultMarkup(report) {
   const gpuCount = report.gpus?.length || 0,
     disk = report.disk,
     internet = report.internet,
-    computeResults = (report.compute?.gpus || []).flatMap(
-      (gpu) => gpu.results || [],
-    ),
-    compute = computeResults
-      .filter((result) => result.ok)
-      .map(
-        (result) =>
-          `${String(result.precision).toUpperCase()} ${fmt(result.tflops, 1)}`,
-      )
-      .join(" / ");
-  return `<div class="instance-benchmark-result"><span>${gpuCount} 张 GPU</span><span>算力 ${compute || "不可用"} TFLOPS</span><span>磁盘 ${fmt(disk?.readMBps)} / ${fmt(disk?.writeMBps)} MB/s</span><span>网络 ${fmt(internet?.downloadMbps)} / ${fmt(internet?.uploadMbps)} Mbps</span></div>`;
+    generatedAt = report.generatedAt
+      ? new Date(report.generatedAt).toLocaleString()
+      : "完成时间未知",
+    computeGpus = report.compute?.gpus || [],
+    gpuPanels = computeGpus.length
+      ? computeGpus
+          .map((gpu) => {
+            const hardware = (report.gpus || []).find(
+                (item) => Number(item.index) === Number(gpu.index),
+              ),
+              metrics = (gpu.results || [])
+                .map(
+                  (result) =>
+                    `<div class="benchmark-metric"><span>${esc(String(result.precision).toUpperCase())}</span><strong>${result.ok ? fmt(result.tflops, 1) : "不可用"}</strong><small>${result.ok ? "TFLOPS" : esc(result.error || "测试失败")}</small></div>`,
+                )
+                .join("");
+            return `<section class="benchmark-group benchmark-compute"><div class="benchmark-group-head"><div><strong>GPU ${esc(gpu.index)} 算力</strong><small>${esc(gpu.name || hardware?.name || "GPU")} · PyTorch 矩阵乘法实测，数值越高越快</small></div></div><div class="benchmark-metrics">${metrics || '<div class="benchmark-unavailable">没有可用的算力测试结果</div>'}</div></section>`;
+          })
+          .join("")
+      : `<section class="benchmark-group benchmark-compute"><div class="benchmark-group-head"><div><strong>GPU 算力</strong><small>PyTorch 矩阵乘法实测</small></div></div><div class="benchmark-unavailable">${esc(report.compute?.error || "没有可用的算力测试结果")}</div></section>`;
+  const metric = (label, value, unit, unavailable) =>
+    `<div class="benchmark-metric"><span>${label}</span><strong>${value == null ? "不可用" : fmt(value)}</strong><small>${value == null ? esc(unavailable || "测试失败") : unit}</small></div>`;
+  return `<div class="instance-benchmark-result"><div class="benchmark-summary"><div><span class="benchmark-summary-icon">${gpuCount}</span><span><strong>${gpuCount} 张 GPU 已完成测试</strong><small>${esc(generatedAt)}</small></span></div><small>以下均为当前实例的实际测试结果，不是硬件标称值</small></div>${gpuPanels}<div class="benchmark-io-grid"><section class="benchmark-group"><div class="benchmark-group-head"><div><strong>本地磁盘</strong><small>/data 顺序读写速度，数值越高越快</small></div></div><div class="benchmark-metrics">${metric("读取", disk?.ok ? disk.readMBps : null, "MB/s", disk?.error)}${metric("写入", disk?.ok ? disk.writeMBps : null, "MB/s", disk?.error)}</div></section><section class="benchmark-group"><div class="benchmark-group-head"><div><strong>公网带宽</strong><small>实例直连测速服务器，实际速度受线路波动影响</small></div></div><div class="benchmark-metrics">${metric("下载", internet?.downloadMbps, "Mbps", internet?.downloadError)}${metric("上传", internet?.uploadMbps, "Mbps", internet?.uploadError)}</div></section></div><p class="benchmark-unit-note"><strong>单位说明：</strong>TFLOPS = 每秒万亿次浮点运算；MB/s = 每秒兆字节；Mbps = 每秒兆比特（约 8 Mbps = 1 MB/s）。FP32 代表标准单精度，TF32/FP16/BF16 是常用于 AI 训练与推理的低精度格式。</p></div>`;
 }
 function updateInstanceBenchmarkCard(id) {
   const instance = instances.find((item) => String(item.id) === String(id)),
@@ -650,11 +671,17 @@ loadInstances = async function () {
         (canStart ? "start" : "stop") +
         '" data-id="' +
         id +
-        '">' +
+        '" ' +
+        (visualStatus === "terminating" ? "disabled" : "") +
+        '>' +
         (canStart ? "启动" : "停止") +
         '</button> <button data-action="delete" data-id="' +
         id +
-        '">删除</button></div></div></article>'
+        '" ' +
+        (visualStatus === "terminating" ? "disabled" : "") +
+        '>' +
+        (visualStatus === "terminating" ? "删除中…" : "删除") +
+        '</button></div></div></article>'
       );
     })
     .join("");
@@ -687,13 +714,13 @@ loadInstances = async function () {
         if (expanded) expandedInstances.add(id);
         else expandedInstances.delete(id);
       };
-      card.style.viewTransitionName =
-        "instance-card-" + id.replace(/[^a-zA-Z0-9_-]/g, "-");
       if (document.startViewTransition) {
         const grid = card.closest(".instance-grid");
+        card.style.viewTransitionName = "instance-card";
         grid?.classList.add("layout-transitioning");
         const transition = document.startViewTransition(updateExpandedState);
         transition.finished.finally(function () {
+          card.style.viewTransitionName = "";
           grid?.classList.remove("layout-transitioning");
         });
       } else updateExpandedState();
@@ -720,6 +747,7 @@ loadInstances = async function () {
       loadReachability(i, false);
     });
   updateInitializationTimers();
+  if (typeof syncOpenSshWindow === "function") syncOpenSshWindow();
 };
 $("#refreshInstances").onclick = async function () {
   setButtonBusy(this, "刷新中…");

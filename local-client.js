@@ -29,7 +29,8 @@ let conflictWindow=null;
 let conflictResolver=null;
 
 app.setName('Fast GPU');
-app.setPath('userData',path.join(dataDirectory,'electron-profile'));
+const electronProfile=process.env.CODEX_PERMISSION_PROFILE?'electron-profile-codex':'electron-profile';
+app.setPath('userData',path.join(dataDirectory,electronProfile));
 
 function localEncryptionKey(){
   const configured=String(process.env.FLEET_CREDENTIAL_ENCRYPTION_KEY||'').trim();

@@ -9,9 +9,13 @@
 .instance.expanded .reachability-targets{grid-template-columns:repeat(2,minmax(0,1fr))}
 .instance-grid.layout-transitioning .instance-detail{transition:none}
 @container (min-width:816px){.instance.expanded{grid-column:span 2}}
-::view-transition-group(*){animation-duration:.32s;animation-timing-function:cubic-bezier(.22,.8,.24,1)}
+::view-transition-group(*){animation-duration:.36s;animation-timing-function:cubic-bezier(.22,.8,.24,1)}
 ::view-transition-old(*),::view-transition-new(*){animation:none;mix-blend-mode:normal}
-@media(prefers-reduced-motion:reduce){.instance,.instance-detail{transition:none}::view-transition-group(*){animation-duration:0s}}
+::view-transition-old(instance-card){animation:instance-card-out .14s ease-out both}
+::view-transition-new(instance-card){animation:instance-card-in .22s .1s ease-out both}
+@keyframes instance-card-out{to{opacity:0}}
+@keyframes instance-card-in{from{opacity:0}}
+@media(prefers-reduced-motion:reduce){.instance,.instance-detail{transition:none}::view-transition-group(*){animation-duration:0s}::view-transition-old(instance-card),::view-transition-new(instance-card){animation:none}}
 .detail-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
 .detail-head small{display:block;color:var(--muted)}
 .detail-head button{border:1px solid var(--line);background:white;border-radius:6px;padding:6px 10px;cursor:pointer}
@@ -27,9 +31,29 @@
 .instance-benchmark-actions select{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .instance-benchmark-actions .danger:not(:disabled){border-color:#d99b94;color:#9b3027}
 .instance-benchmark-state{padding:10px 12px;border-radius:7px;background:#f4f7f5;color:var(--muted);font-size:12px}
-.instance-benchmark-result{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:9px}
-.instance-benchmark-result span{padding:8px;border:1px solid var(--line);border-radius:6px;background:#fff;font-size:11px}
+.instance-benchmark-result{display:grid;gap:10px;margin-top:10px}
+.benchmark-summary{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:11px 12px;border:1px solid #c9d9d0;border-radius:7px;background:#f1f6f3}
+.benchmark-summary>div{display:flex;align-items:center;gap:10px;min-width:0}
+.benchmark-summary-icon{display:grid;place-items:center;flex:0 0 32px;height:32px;border-radius:6px;background:#244b38;color:#fff;font-size:15px;font-weight:700}
+.benchmark-summary span:not(.benchmark-summary-icon){display:grid;gap:2px}
+.benchmark-summary small,.benchmark-group-head small,.benchmark-metric small,.benchmark-unit-note{color:var(--muted);font-size:11px}
+.benchmark-summary>small{text-align:right}
+.benchmark-group{padding:12px;border:1px solid var(--line);border-radius:7px;background:#fff}
+.benchmark-group-head{display:flex;align-items:start;justify-content:space-between;gap:10px;margin-bottom:10px}
+.benchmark-group-head strong,.benchmark-group-head small{display:block}
+.benchmark-group-head small{margin-top:2px;line-height:1.45}
+.benchmark-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+.benchmark-metric{min-width:0;padding:9px 10px;border-radius:6px;background:#f5f7f6}
+.benchmark-metric>span{display:block;color:var(--muted);font-size:11px}
+.benchmark-metric strong{display:inline-block;margin-top:4px;font-size:18px;line-height:1.1;font-variant-numeric:tabular-nums}
+.benchmark-metric small{display:inline;margin-left:4px;overflow-wrap:anywhere}
+.benchmark-io-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.benchmark-io-grid .benchmark-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+.benchmark-unavailable{padding:10px;border-radius:6px;background:#f5f7f6;color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+.benchmark-unit-note{margin:0;padding:1px 2px;line-height:1.55}
+.benchmark-unit-note strong{color:var(--ink)}
 @media(max-width:1100px){.reachability-targets{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){.benchmark-summary{align-items:flex-start}.benchmark-summary>small{display:none}.benchmark-metrics,.benchmark-io-grid{grid-template-columns:1fr 1fr}.benchmark-io-grid .benchmark-metrics{grid-template-columns:1fr}.instance-benchmark-actions{flex-wrap:wrap}}
 .ssh-security-note{margin:8px 0 16px;color:var(--muted);font-size:12px}
 .ssh-field{display:grid;grid-template-columns:70px 1fr;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
 .ssh-field span{color:var(--muted);font-size:11px}

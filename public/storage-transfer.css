@@ -37,6 +37,7 @@
 .drop-zone { display: grid; place-items: center; min-height: 105px; margin-bottom: 10px; padding: 18px; border: 2px dashed #b8c8bf; border-radius: 9px; background: white; cursor: pointer; text-align: center; }
 .drop-zone.dragging { border-color: var(--green); background: #eaf8ef; }
 .drop-zone > input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.drop-zone[hidden], .transfer-destination[hidden] { display: none; }
 .drop-zone small { color: var(--muted); }
 .picker-actions { display: flex; gap: 8px; margin-top: 10px; }
 .picker-actions button { border: 1px solid var(--line); border-radius: 7px; padding: 7px 12px; background: white; cursor: pointer; }
@@ -52,6 +53,7 @@
 .remote-directory-hint span { display: block; min-width: 0; overflow-wrap: anywhere; }
 .remote-directory-hint.relative { color: #176535; }
 .remote-directory-hint.invalid { color: #b43b2f; }
+.remote-directory-hint[hidden], .compress-toggle[hidden] { display: none; }
 .transfer-destination progress[hidden] { display: none; }
 #uploadScpFile { min-width: 92px; min-height: 36px; align-self: start; padding: 8px 14px; border: 1px solid #0b2417; border-radius: 7px; background: #123d25; color: #fff; font: inherit; font-weight: 700; cursor: pointer; box-shadow: 0 1px 2px #07150d24; transition: background .15s ease, border-color .15s ease, transform .15s ease; }
 #uploadScpFile:hover:not(:disabled) { border-color: #176b3b; background: #176b3b; transform: translateY(-1px); }
@@ -105,6 +107,32 @@
 .sync-direction { display: inline-flex; gap: 3px; margin: 2px 0 10px; padding: 3px; border-radius: 8px; background: #e9eeeb; }
 .sync-direction button { padding: 7px 13px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; }
 .sync-direction button.active { color: #fff; background: var(--dark); }
+.scp-direction { display: inline-flex; gap: 3px; margin: 0 0 10px; padding: 3px; border-radius: 8px; background: #e9eeeb; }
+.scp-direction button { padding: 7px 13px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; }
+.scp-direction button.active { color: #fff; background: var(--dark); }
+.scp-download-controls { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
+.scp-download-controls[hidden] { display: none; }
+.scp-download-controls .transfer-help, .scp-download-summary { grid-column: 1 / -1; margin: 0; }
+.scp-download-controls label { display: grid; gap: 5px; min-width: 0; color: var(--muted); font-size: 12px; }
+.scp-download-controls input { min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 7px; }
+.local-download-field { grid-template-columns: minmax(0, 1fr) auto; }
+.local-download-field span { grid-column: 1 / -1; }
+.local-download-field button, #downloadScpFile { min-height: 36px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; }
+#downloadScpFile { color: #fff; border-color: #0b2417; background: #123d25; font-weight: 700; }
+.scp-download-summary { min-height: 1.35em; color: var(--muted); overflow-wrap: anywhere; }
+#scpLocalPicker, #scpRemotePicker { width: min(620px, calc(100vw - 28px)); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 22px 65px #0005; }
+#scpLocalPicker::backdrop, #scpRemotePicker::backdrop { background: #07110c99; }
+.local-picker { display: grid; gap: 12px; }
+.local-picker header, .local-picker footer, .local-picker-path { display: flex; align-items: center; gap: 10px; }
+.local-picker header strong { margin-right: auto; }
+.local-picker button { padding: 7px 11px; border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer; }
+.local-picker footer { justify-content: end; }
+.local-picker footer button:last-child { color: #fff; border-color: var(--dark); background: var(--dark); }
+.local-picker-path code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.local-picker-entries { display: grid; max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 7px; background: #fafcfb; }
+.local-picker-entries button, .local-picker-file { display: flex; gap: 9px; width: 100%; border: 0; border-radius: 0; text-align: left; }
+.local-picker-entries button:hover { background: #eaf4ee; }
+.local-picker-entries span { width: 42px; flex: none; color: var(--muted); font-size: 11px; }
 @media (hover: hover) {
   .sync-direction button:hover:not(:disabled):not(.active) { color: #244332; background: #dfe9e3; }
   .sync-direction button.active:hover:not(:disabled) { color: #fff; background: #1d3429; }

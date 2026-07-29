@@ -1373,7 +1373,10 @@ async function managedSshConnection(providerId, id) {
     saved = sshStore.get(providerId, id);
   if (!saved) return null;
   let host = saved.host,
-    port = Number(saved.externalPort);
+    port = Number(
+      saved.externalPort ||
+        (providerId === "hyperstack" ? saved.internalPort : 0),
+    );
   if ((!host || !port) && typeof adapter.resolveSshEndpoint === "function")
     ({ host, port } = await adapter.resolveSshEndpoint(id, saved.internalPort));
   else if (!host || !port) {
@@ -1385,7 +1388,8 @@ async function managedSshConnection(providerId, id) {
         code: "ssh_provider_error",
       });
     host = instance.sshHost || instance.ip;
-    port = Number(instance.sshPort);
+    // Hyperstack lists its conventional port 22, not its per-VM SSH port.
+    port = port || Number(instance.sshPort);
   }
   if (!host || !port)
     throw Object.assign(Error("厂商尚未分配 SSH 公网地址或映射端口"), {
@@ -1447,7 +1451,7 @@ function securePrivateKeyFile(filename) {
     throw new Error("无法确定运行平台服务的 Windows 账号");
   const acl = spawnSync(
     "icacls",
-    [filename, "/inheritance:r", "/grant:r", `${account}:(R)`],
+    [filename, "/inheritance:r", "/grant:r", `${account}:(F)`],
     { encoding: "utf8", windowsHide: true },
   );
   if (acl.status !== 0)
@@ -4452,6 +4456,11 @@ async function api(req, res, url) {
           (instanceFirstSeen.get(id) || Date.now()) + telemetryGraceMs;
         return {
           ...x,
+          sshHost: savedSsh?.host || x.sshHost,
+          sshPort:
+            savedSsh?.externalPort ||
+            (x.provider === "hyperstack" ? savedSsh?.internalPort : undefined) ||
+            x.sshPort,
           price:
             Number(x.price) > 0
               ? Number(x.price)
@@ -4641,6 +4650,7 @@ async function api(req, res, url) {
         privateKey: instanceCredential.privateKey,
         publicKey: instanceCredential.publicKey,
         internalPort: d.provider === "hyperstack" ? item.sshPort : sshStore.port,
+        externalPort: d.provider === "hyperstack" ? item.sshPort : undefined,
         username: item.sshUser || "root",
       });
     instanceLaunchProfiles.set(`${d.provider}:${item.id}`, {
@@ -5096,6 +5106,108 @@ async function api(req, res, url) {
       removeTemporaryFile(localFile);
     }
   }
+  const scpList = url.pathname.match(/^\/api\/instances\/([^/]+)\/files\/list$/);
+  if (req.method === "POST" && scpList) {
+    const id = decodeURIComponent(scpList[1]),
+      d = await body(req),
+      providerId = String(d.provider || ""),
+      managed = await managedSshConnection(providerId, id),
+      requestedPath = String(d.path || "/").trim();
+    if (!managed)
+      throw Object.assign(Error("文件传输只支持托管私钥实例"), {
+        status: 409,
+        code: "ssh_credentials_unavailable",
+      });
+    if (!/^\/[a-zA-Z0-9._/+-]*$/.test(requestedPath) || requestedPath.includes(".."))
+      throw Object.assign(Error("云端目录必须是安全的绝对路径"), {
+        status: 400,
+        code: "invalid_download_path",
+      });
+    const remotePath = path.posix.normalize(requestedPath),
+      parent = remotePath === "/" ? null : path.posix.dirname(remotePath),
+      token = randomBytes(12).toString("hex"),
+      keyFile = path.join(os.tmpdir(), `fast-gpu-list-${token}.pem`),
+      quote = (value) => `'${String(value).replaceAll("'", "'\\\"'\\\"'")}'`;
+    try {
+      fs.writeFileSync(keyFile, openSshPrivateKey(managed.privateKey), { mode: 0o600 });
+      securePrivateKeyFile(keyFile);
+      const output = await runCommand(
+        "ssh",
+        [
+          "-i", keyFile, "-p", String(managed.port),
+          "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+          "-o", "ConnectTimeout=8", "-o", "ConnectionAttempts=1",
+          `${managed.username}@${managed.host}`,
+          `dir=${quote(remotePath)}; [ -d "$dir" ] || exit 2; for item in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do [ -e "$item" ] || continue; name=\${item##*/}; case "$name" in *[!A-Za-z0-9._+-]* ) continue;; esac; if [ -d "$item" ]; then printf 'd\\t%s\\n' "$name"; elif [ -f "$item" ]; then printf 'f\\t%s\\n' "$name"; fi; done`,
+        ],
+        { timeout: 30000, killSignal: "SIGKILL" },
+      );
+      const entries = output.split(/\r?\n/).map((line) => line.split("\t")).filter(([kind, name]) => (kind === "d" || kind === "f") && /^[a-zA-Z0-9._+-]+$/.test(name || "")).map(([kind, name]) => ({ name, path: path.posix.join(remotePath, name), directory: kind === "d" })).sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name));
+      return json(res, 200, { path: remotePath, parent, entries });
+    } finally {
+      removeTemporaryFile(keyFile);
+    }
+  }
+  const scpDownload = url.pathname.match(/^\/api\/instances\/([^/]+)\/files\/download$/);
+  if (req.method === "POST" && scpDownload) {
+    if (CLIENT_MODE !== "local")
+      throw Object.assign(Error("下载到本机需要 Fast GPU 本地客户端"), {
+        status: 409,
+        code: "local_client_required",
+      });
+    const id = decodeURIComponent(scpDownload[1]),
+      d = await body(req),
+      providerId = String(d.provider || ""),
+      managed = await managedSshConnection(providerId, id);
+    if (!managed)
+      throw Object.assign(Error("文件传输只支持托管私钥实例"), {
+        status: 409,
+        code: "ssh_credentials_unavailable",
+      });
+    const remotePath = String(d.remotePath || "").trim(),
+      requestedLocalDirectory = String(d.localDirectory || "").trim();
+    if (!/^\/[a-zA-Z0-9._/+-]+$/.test(remotePath) || remotePath.includes(".."))
+      throw Object.assign(Error("云端文件必须是安全的绝对路径"), {
+        status: 400,
+        code: "invalid_download_path",
+      });
+    if (!path.isAbsolute(requestedLocalDirectory))
+      throw Object.assign(Error("本地保存目录必须是绝对路径"), {
+        status: 400,
+        code: "local_path_must_be_absolute",
+      });
+    const localDirectory = path.normalize(requestedLocalDirectory);
+    if (!fs.existsSync(localDirectory) || !fs.statSync(localDirectory).isDirectory())
+      throw Object.assign(Error("本地保存目录不存在或不是文件夹"), { status: 400 });
+    const filename = path.posix.basename(remotePath),
+      localPath = path.join(localDirectory, filename),
+      token = randomBytes(12).toString("hex"),
+      keyFile = path.join(os.tmpdir(), `fast-gpu-download-${token}.pem`),
+      quote = (value) => `'${String(value).replaceAll("'", "'\\\"'\\\"'")}'`;
+    try {
+      fs.writeFileSync(keyFile, openSshPrivateKey(managed.privateKey), { mode: 0o600 });
+      securePrivateKeyFile(keyFile);
+      await runCommand(
+        "scp",
+        [
+          "-i", keyFile, "-P", String(managed.port),
+          "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+          "-o", "ConnectTimeout=8", "-o", "ConnectionAttempts=1",
+          `${managed.username}@${managed.host}:${quote(remotePath)}`, localDirectory,
+        ],
+        { timeout: 30 * 60 * 1000, killSignal: "SIGKILL" },
+      );
+      return json(res, 200, { ok: true, remotePath, localPath });
+    } catch (cause) {
+      throw Object.assign(Error(`云端文件下载失败：${cause.message}`), {
+        status: 502,
+        code: "ssh_transfer_failed",
+        cause,
+      });
+    } finally {
+      removeTemporaryFile(keyFile);
+    }
+  }
   const localSync = url.pathname.match(
     /^\/api\/instances\/([^/]+)\/local-sync$/,
   );
@@ -5534,18 +5646,6 @@ async function api(req, res, url) {
       id = decodeURIComponent(action[1]),
       operation = action[2];
     try {
-      if (operation === "delete") {
-        try {
-          await runInstanceSshCommand(
-            d.provider,
-            id,
-            "state=/opt/fast-gpu/storage/state.json; target=''; if test -f \"$state\"; then target=$(node -e \"try{process.stdout.write(require(process.argv[1]).target||'')}catch{}\" \"$state\" 2>/dev/null || true); fi; if test -n \"$target\" && mountpoint -q \"$target\"; then (command -v fusermount3 >/dev/null && fusermount3 -u \"$target\") || (command -v fusermount >/dev/null && fusermount -u \"$target\") || umount \"$target\"; fi; rm -f \"$state\"",
-            30000,
-          );
-        } catch (error) {
-          console.warn(`实例 ${id} 删除前断开对象存储失败，将继续释放实例：`, error.message);
-        }
-      }
       const adapter = provider(d.provider);
       if (operation === "delete" && typeof adapter.deleteInstance === "function")
         await adapter.deleteInstance(id);

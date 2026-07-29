@@ -25,3 +25,15 @@ test("local transfer paths must remain absolute in the UI and API", () => {
   assert.match(server, /local_path_must_be_absolute/);
   assert.doesNotMatch(server, /path\.resolve\(String\(d\.localPath/);
 });
+
+test("SCP download browses remote files while local storage uses the system picker", () => {
+  assert.match(app, /data-scp-direction="download"/);
+  assert.match(app, /scpDownloadRemotePath/);
+  assert.match(app, /browseScpDownloadRemote/);
+  assert.match(app, /fastGpuWindow\?\.pickDirectory/);
+  assert.match(app, /scpDirectoryCache/);
+  assert.match(server, /files\\\/download/);
+  assert.match(server, /files\\\/list/);
+  assert.match(server, /云端文件必须是安全的绝对路径/);
+  assert.match(server, /fast-gpu-list-/);
+});
