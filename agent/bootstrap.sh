@@ -22,8 +22,17 @@ try:
         current = json.load(file)
 except (OSError, ValueError):
     pass
+diagnostics = ''
+try:
+    with open('/var/lib/fast-gpu/ssh-diagnostics.log', encoding='utf-8') as file:
+        diagnostics = file.read()[-12000:]
+except OSError:
+    pass
+payload = {'status': status, 'phase': phase, 'phaseLabel': label, 'warnings': current.get('warnings', []), 'updatedAt': int(time.time() * 1000)}
+if diagnostics:
+    payload['sshDiagnostics'] = diagnostics
 with open('/var/lib/fast-gpu/profile.json', 'w', encoding='utf-8') as file:
-    json.dump({'status': status, 'phase': phase, 'phaseLabel': label, 'warnings': current.get('warnings', []), 'updatedAt': int(time.time() * 1000)}, file)
+    json.dump(payload, file, ensure_ascii=False)
 PY
 }
 fail() {

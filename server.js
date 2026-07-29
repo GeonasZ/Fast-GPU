@@ -1247,6 +1247,18 @@ async function configureNamedTunnel(baseUrl) {
     throw error;
   }
 }
+function managedHostKeyArgs(managed) {
+  const directory = path.join(__dirname, ".data", "ssh-known-hosts"),
+    identity = `${managed.provider || "managed"}-${managed.id || managed.providerInstanceId || managed.host}`
+      .replace(/[^a-z0-9._-]/gi, "_");
+  fs.mkdirSync(directory, { recursive: true });
+  return [
+    "-o",
+    `UserKnownHostsFile=${path.join(directory, identity)}`,
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+  ];
+}
 async function verifyManagedSsh(managed, timeout = 20000) {
   const args = [
     "-i",
@@ -1255,8 +1267,7 @@ async function verifyManagedSsh(managed, timeout = 20000) {
     String(managed.port),
     "-o",
     "BatchMode=yes",
-    "-o",
-    "StrictHostKeyChecking=accept-new",
+    ...managedHostKeyArgs(managed),
     "-o",
     "ConnectTimeout=8",
     "-o",
@@ -1743,8 +1754,7 @@ async function reinjectTelemetryAgent(providerId, id, { recoveryOnly = false } =
         String(managed.port),
         "-o",
         "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
+        ...managedHostKeyArgs(managed),
         "-o",
         "ConnectTimeout=10",
         "-o",
@@ -1802,7 +1812,7 @@ async function reinjectTelemetryAgent(providerId, id, { recoveryOnly = false } =
     ]);
     await runCommand("scp", [
       "-i", keyFile, "-P", String(managed.port),
-      "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+      "-o", "BatchMode=yes", ...managedHostKeyArgs(managed),
       path.join(transferDir, "bootstrap.sh"),
       path.join(transferDir, "agent.js"),
       path.join(transferDir, "agent.env"),
@@ -1856,6 +1866,7 @@ async function provisionHyperstackViaSsh(id, options, credential) {
     token = randomBytes(12).toString("hex"),
     transferDir = path.join(os.tmpdir(), `fast-gpu-hyperstack-${token}`),
     keyFile = path.join(os.tmpdir(), `fast-gpu-hyperstack-${token}.pem`),
+    knownHostsFile = path.join(transferDir, "known_hosts"),
     remoteDir = `/tmp/fast-gpu-hyperstack-${token}`;
   let failureLog = "";
   setHyperstackProvisionRuntime(instanceId, "awaiting_ssh");
@@ -1908,6 +1919,7 @@ async function provisionHyperstackViaSsh(id, options, credential) {
     securePrivateKeyFile(keyFile);
     const sshArgs = [
       "-T", "-i", keyFile, "-p", String(managed.port), "-o", "BatchMode=yes",
+      "-o", `UserKnownHostsFile=${knownHostsFile}`,
       "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10",
       "-o", "ConnectionAttempts=1",
     ];
@@ -1925,6 +1937,7 @@ async function provisionHyperstackViaSsh(id, options, credential) {
     await runCommand("ssh", [...sshArgs, `${managed.username}@${managed.host}`, `mkdir -p ${remoteDir}`]);
     await runCommand("scp", [
       "-i", keyFile, "-P", String(managed.port), "-o", "BatchMode=yes",
+      "-o", `UserKnownHostsFile=${knownHostsFile}`,
       "-o", "StrictHostKeyChecking=accept-new",
       ...["hyperstack.sh", "bootstrap.sh", "agent.js", "provision.env", "run.sh"].map((name) => path.join(transferDir, name)),
       `${managed.username}@${managed.host}:${remoteDir}/`,

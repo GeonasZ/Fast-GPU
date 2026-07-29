@@ -9,6 +9,23 @@ report() {
   printf '%s\n' "$1" > "$state_dir/provision.phase"
 }
 
+collect_ssh_diagnostics() {
+  {
+    printf 'collected_at=%s\n' "$(date -Is 2>/dev/null || date)"
+    printf 'sshd_path=%s\n' "$(command -v sshd 2>/dev/null || true)"
+    printf 'sshd_enabled=%s\n' "$(systemctl is-enabled ssh 2>&1 || true)"
+    printf 'sshd_active=%s\n' "$(systemctl is-active ssh 2>&1 || true)"
+    printf 'listeners=\n'
+    ss -lntp 2>&1 | sed -n '1,40p' || true
+    printf 'sshd_config_test=\n'
+    sshd -t 2>&1 || true
+    printf 'journal=\n'
+    journalctl -u ssh -b --no-pager -n 80 2>&1 || true
+    printf 'cloud_init=\n'
+    tail -n 80 /var/log/cloud-init-output.log 2>&1 || true
+  } > "$state_dir/ssh-diagnostics.log" 2>&1 || true
+}
+
 fail() {
   printf '{"status":"failed"}\n' > "$state_dir/profile.json"
   report failed "$1"
@@ -88,8 +105,10 @@ EOF
     command -v update-rc.d >/dev/null 2>&1 && update-rc.d ssh defaults >/dev/null
     service ssh restart
   fi
-  pgrep -x sshd >/dev/null
-  timeout 5 ssh-keyscan -p "$ssh_port" 127.0.0.1 >/dev/null 2>&1
+  if ! pgrep -x sshd >/dev/null || ! timeout 5 ssh-keyscan -p "$ssh_port" 127.0.0.1 >/dev/null 2>&1; then
+    collect_ssh_diagnostics
+    return 1
+  fi
 }
 
 run_vm_startup() {
@@ -103,11 +122,12 @@ run_vm_startup() {
 
 report vm_startup
 if ! run_vm_startup; then
+  collect_ssh_diagnostics
   ensure_vm_ssh_final || true
   fail "VM startup behavior failed"
 fi
 report ensuring_vm_ssh
-ensure_vm_ssh_final || fail "SSH final verification failed after VM startup behavior"
+ensure_vm_ssh_final || { collect_ssh_diagnostics; fail "SSH final verification failed after VM startup behavior"; }
 
 validate_image() {
   local candidate="$1"
