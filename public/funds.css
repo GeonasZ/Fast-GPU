@@ -321,6 +321,70 @@
   text-decoration: none;
 }
 
+#hyperstackConfigForm .field-link-button.empty-primary {
+  padding: 5px 9px;
+  border: 1px solid #b8d9c5;
+  border-radius: 6px;
+  background: #f1faf4;
+  text-decoration: none;
+}
+
+.hyperstack-keypair-empty {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px dashed #b9cfc1;
+  border-radius: 7px;
+  background: #f7fbf8;
+}
+
+.hyperstack-keypair-empty[hidden],
+.hyperstack-keypair-registration[hidden] {
+  display: none;
+}
+
+.hyperstack-keypair-empty > span {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  background: #e1f4e8;
+  color: #17683d;
+  display: grid;
+  place-items: center;
+  font-size: 21px;
+  font-weight: 800;
+}
+
+.hyperstack-keypair-empty strong,
+.hyperstack-keypair-empty small {
+  display: block;
+}
+
+.hyperstack-keypair-empty strong {
+  color: #26362e;
+  font-size: 12px;
+}
+
+.hyperstack-keypair-empty small {
+  margin-top: 2px;
+  color: #68766f;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.hyperstack-keypair-empty button {
+  border: 1px solid #17683d;
+  border-radius: 6px;
+  padding: 8px 11px;
+  background: #17683d;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 .hyperstack-keypair-ownership-notice {
   display: block;
   padding: 8px 10px;
@@ -484,6 +548,15 @@
     width: 100%;
   }
 
+  .hyperstack-keypair-empty {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .hyperstack-keypair-empty button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
 }
 
 .provider-tabs button.auth-expired,
@@ -562,4 +635,36 @@
   border-color: var(--dark);
   background: var(--dark);
   color: #fff;
+}
+
+.entity-picker-native { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; white-space: nowrap !important; }
+.entity-picker { position: relative; }
+.entity-picker-trigger { width: 100%; min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; }
+.entity-picker-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entity-picker-trigger i { color: var(--muted); font-style: normal; }
+.entity-picker-trigger.unmanaged { border-color: #d8ad35; background: #fff8dc; color: #684f08; box-shadow: 0 0 0 2px #e2bd5226; }
+.entity-picker-popup { position: absolute; z-index: 80; top: calc(100% + 6px); right: 0; left: 0; max-height: 280px; overflow: auto; padding: 6px; border: 1px solid #d7dfda; border-radius: 8px; background: #fff; box-shadow: 0 18px 44px #10271b2b; }
+.entity-picker-popup[hidden] { display: none; }
+.entity-picker-item { display: grid; grid-template-columns: minmax(0, 1fr) 34px; align-items: stretch; border-radius: 6px; }
+.entity-picker-item:hover, .entity-picker-item.selected { background: #f1f7f3; }
+.entity-picker-item.unmanaged { background: #fff8dc; }
+.entity-picker-item.unmanaged:hover, .entity-picker-item.unmanaged.selected { background: #fff1b8; box-shadow: inset 3px 0 #d8ad35; }
+.entity-picker-item.unmanaged small { color: #765b0b; font-weight: 700; }
+.entity-picker-item > button:first-child { min-width: 0; display: grid; gap: 2px; padding: 9px 10px; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.entity-picker-item strong, .entity-picker-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entity-picker-item small { color: var(--muted); font-size: 10px; }
+.entity-picker-delete { align-self: center; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: #8b9690; font-size: 20px; line-height: 1; cursor: pointer; }
+.entity-picker-delete:hover { border-radius: 5px; background: #feeceb; color: #b42318; }
+
+dialog { width: min(550px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; border: 1px solid #dce4df; border-radius: 8px; background: #fff; box-shadow: 0 24px 70px #07130d42; }
+dialog::backdrop { background: #07110c99; backdrop-filter: blur(2px); }
+dialog form { padding: 24px; }
+dialog h2, dialog h3 { padding-right: 42px; letter-spacing: 0; }
+dialog .close { right: 14px; top: 14px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #65716b; font-size: 22px; line-height: 1; cursor: pointer; }
+dialog .close:hover { border-color: #d8e0db; background: #f3f6f4; color: #16231c; }
+dialog menu { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); }
+
+@media (max-width: 600px) {
+  dialog { width: calc(100vw - 20px); max-height: calc(100vh - 20px); }
+  dialog form { padding: 20px; }
 }

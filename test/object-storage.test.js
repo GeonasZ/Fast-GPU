@@ -128,14 +128,47 @@ test("bulk object deletion deduplicates keys and reports partial failures", asyn
   assert.equal(result.errors[0].code, "AccessDenied");
 });
 
-test("storage settings save does not require the primary provider to be enabled", () => {
+test("storage settings reject empty forms and support multiple named profiles", () => {
   const source = require("node:fs").readFileSync(
     require("node:path").join(__dirname, "..", "server.js"),
     "utf8",
   );
-  assert.doesNotMatch(source, /主存储供应商必须处于启用状态/);
+  assert.match(source, /空表单不能保存/);
+  assert.match(source, /normalizeStorageConfig/);
+  assert.match(source, /activeProfileId/);
+  assert.match(source, /storageProfileDelete/);
+  assert.match(source, /storageConfigFromEnvironment/);
   assert.match(source, /objectStorage\.probeAccess/);
-  assert.match(source, /storedStorageConfig\(\)\?\.verification/);
+});
+
+test("storage page hides tools until an object storage provider is enabled", () => {
+  const source = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "..", "public", "storage-page.js"),
+    "utf8",
+  );
+  assert.match(source, /请先至少启用一个对象存储以开始/);
+  assert.match(source, /existingStorageDisclosure\.hidden = enabled === 0/);
+  assert.match(source, /storageBrowserDisclosure\.hidden = enabled === 0/);
+  assert.match(source, /storageUploadDisclosure\.hidden = enabled === 0/);
+  assert.match(source, /storage-profile-manager/);
+  assert.match(source, /StorageProfileAdd/);
+  assert.match(source, /StorageProfileRemove/);
+  assert.match(source, /saveStorageProvider\(provider\)/);
+  assert.match(source, /未保存修改/);
+  assert.match(source, /existingStorageDisclosure\.hidden = true/);
+  assert.match(source, /storageBrowserDisclosure\.hidden = true/);
+  assert.match(source, /storageUploadDisclosure\.hidden = true/);
+  assert.match(source, /storage-summary-actions/);
+  assert.match(source, /data-storage-summary-provider/);
+  assert.match(source, /editor\.className = "storage-profile-editor"/);
+  assert.match(source, /editor\.hidden = true/);
+  assert.match(source, /fields\.editor\.hidden = !visible/);
+  assert.match(source, /\$\(storageProviderFields\[provider\]\.add\)\.click\(\)/);
+  assert.doesNotMatch(source, /storageProviderFields\[provider\]\.add\.click\(\)/);
+  assert.match(source, /configPrefix/);
+  assert.match(source, /destinationKey = \[configPrefix, destinationPrefix, uploadName\]/);
+  assert.match(source, /prefix: \$\(fields\.prefix\)\.value/);
+  assert.doesNotMatch(source, /save\.textContent = "保存"/);
 });
 
 test("existing-instance S3 sync always shows and submits an explicit prefix", () => {
@@ -152,8 +185,35 @@ test("existing-instance S3 sync always shows and submits an explicit prefix", ()
   assert.match(source, /data-storage-path-file/);
   assert.match(source, /fast-gpu-existing-storage-v1/);
   assert.match(source, /state\.prefix \|\| ""/);
-  assert.match(source, /缺少时自动安装挂载工具/);
+  assert.match(source, /自动安装必要依赖/);
+  assert.match(source, /正在检查依赖/);
+  assert.match(source, /正在安装依赖/);
+  assert.match(source, /正在同步 S3 数据/);
+  assert.doesNotMatch(source, /existingStorageHint[^\n]+result\.output/);
+  assert.match(source, /请确保实例正在运行且 SSH 正常工作/);
   assert.match(source, /autoInstall: \$\("#existingStorageAutoInstall"\)\.checked/);
+});
+
+test("S3 copy and mount automatically install their required instance tools", () => {
+  const source = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "..", "server.js"),
+    "utf8",
+  );
+  assert.match(source, /requiredPackages = mode === "mount" \? "rclone fuse3 util-linux" : "rclone"/);
+  assert.match(source, /prepare = `set -Eeuo pipefail; \$\{installRequiredTools\}/);
+  assert.match(source, /d\.phase === "check" \? checkDependencies/);
+  assert.match(source, /d\.phase === "prepare" \? prepare/);
+  assert.doesNotMatch(source, /mode === "mount" \? installMountTools/);
+});
+
+test("existing-instance S3 sync accepts valid Unicode object keys", () => {
+  const source = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "..", "server.js"),
+    "utf8",
+  );
+  assert.match(source, /\[\\u0000-\\u001f\\u007f\]\/\.test\(prefix\)/);
+  assert.doesNotMatch(source, /\^\[a-zA-Z0-9!_\.\*'\(\)\/\-\]\*\$/);
+  assert.doesNotMatch(source, /prefix\.includes\("\.\."\)/);
 });
 
 test("new instances never auto-sync object storage", () => {

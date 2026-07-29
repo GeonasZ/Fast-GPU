@@ -1,10 +1,11 @@
 const {app,BrowserWindow,dialog,shell,ipcMain}=require('electron');
-const {spawn}=require('node:child_process');
+const {spawn,spawnSync}=require('node:child_process');
 const http=require('node:http');
 const net=require('node:net');
 const fs=require('node:fs');
 const path=require('node:path');
 const {randomBytes,createHash}=require('node:crypto');
+const {canBindPort,parseWindowsListeningPids,waitForPortAvailable}=require('./lib/local-port');
 
 const port=Number(process.env.PORT||4173);
 const remoteArgument=process.argv.find(value=>value.startsWith('--remote-url='));
@@ -24,6 +25,8 @@ let mainWindow=null;
 let controlServer=null;
 let quitting=false;
 let forceExitTimer=null;
+let conflictWindow=null;
+let conflictResolver=null;
 
 app.setName('Fast GPU');
 app.setPath('userData',path.join(dataDirectory,'electron-profile'));
@@ -71,14 +74,45 @@ function startServer(){
   });
 }
 
+function askCloseConflict(){
+  return new Promise(resolve=>{
+    conflictWindow=new BrowserWindow({parent:mainWindow,modal:true,width:460,height:260,resizable:false,show:false,frame:false,webPreferences:{contextIsolation:true,nodeIntegration:false,preload:path.join(__dirname,'electron-preload.js')}});
+    conflictResolver=()=>{resolve(true); conflictResolver=null; conflictWindow?.close(); conflictWindow=null;};
+    conflictWindow.webContents.once('did-finish-load',()=>conflictWindow.show());
+    conflictWindow.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(`<style>body{margin:0;background:#102019;color:#e5f0e9;font:14px system-ui;padding:28px}h2{margin:0 0 12px}p{color:#a8b9ae;line-height:1.6}.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:26px}button{padding:10px 16px;border-radius:7px;border:1px solid #41634f;background:#183326;color:#dff5e7;cursor:pointer}button.primary{background:#25c46a;color:#092413;border-color:#25c46a}</style><h2>端口冲突</h2><p>端口 ${port} 已被其他服务占用。是否关闭冲突进程并继续启动？</p><div class="actions"><button onclick="window.close()">取消启动</button><button class="primary" onclick="window.fastGpuWindow.conflictChoice()">关闭冲突进程并继续</button></div>`));
+    conflictWindow.on('closed',()=>{if(conflictWindow){conflictResolver=null; conflictWindow=null; resolve(false);}});
+  });
+}
+
+async function ensureLocalPortAvailable(){
+  if(await canBindPort(port))return;
+  if(process.platform!=='win32')throw new Error(`端口 ${port} 已被其他服务占用，请先关闭该服务或通过 PORT 设置其他端口`);
+  if(!await askCloseConflict())throw new Error('已取消启动');
+  const output=spawnSync('netstat',['-ano','-p','tcp'],{encoding:'utf8',windowsHide:true}).stdout||'';
+  const pids=parseWindowsListeningPids(output,port).filter(pid=>pid!==process.pid);
+  if(!pids.length)throw new Error(`未能找到占用端口 ${port} 的进程`);
+  for(const pid of pids){
+    const result=spawnSync('taskkill',['/PID',String(pid),'/T','/F'],{encoding:'utf8',windowsHide:true});
+    if(result.status!==0)throw new Error(`无法关闭占用端口 ${port} 的进程 ${pid}：${String(result.stderr||result.stdout||'权限不足').trim()}`);
+  }
+  if(!await waitForPortAvailable(port))throw new Error(`进程已关闭，但端口 ${port} 在 5 秒内仍未释放`);
+}
+
 function waitUntilReady(){
   return new Promise((resolve,reject)=>{
     let attempts=0;
     const probe=()=>{
-      const request=http.get(url,response=>{
-        response.resume();
-        if(response.statusCode&&response.statusCode<500)return resolve();
-        retry();
+      const request=http.get(`${url}/api/auth/me`,response=>{
+        let body='';
+        response.setEncoding('utf8');
+        response.on('data',chunk=>body+=chunk);
+        response.on('end',()=>{
+          try{
+            const payload=JSON.parse(body);
+            if(response.statusCode===200&&payload.mode==='local')return resolve();
+          }catch{}
+          retry();
+        });
       });
       request.setTimeout(2000,()=>request.destroy());
       request.once('error',retry);
@@ -92,13 +126,29 @@ function waitUntilReady(){
 }
 
 function stopServer(){
-  if(!serverProcess||serverProcess.killed)return;
   const processToStop=serverProcess;
-  serverProcess.kill('SIGTERM');
-  const forceStop=setTimeout(()=>{
-    if(processToStop.exitCode==null)processToStop.kill('SIGKILL');
-  },1500);
-  forceStop.unref();
+  if(!processToStop)return Promise.resolve();
+  return new Promise(resolve=>{
+    if(processToStop.exitCode!=null){ resolve(); return; }
+    let settled=false;
+    const finish=()=>{ if(settled)return; settled=true; clearTimeout(forceStop); resolve(); };
+    processToStop.once('exit',finish);
+    processToStop.kill('SIGTERM');
+    // On Windows SIGTERM may only signal the wrapper. Kill the complete
+    // process tree after a short grace period so the HTTP server cannot linger.
+    const forceStop=setTimeout(()=>{
+      if(processToStop.exitCode!=null)return finish();
+      if(process.platform==='win32'){
+        const killer=spawn('taskkill',['/PID',String(processToStop.pid),'/T','/F'],{windowsHide:true});
+        killer.once('close',finish);
+        killer.once('error',finish);
+      }else{
+        try{processToStop.kill('SIGKILL')}catch{}
+        finish();
+      }
+    },1500);
+    forceStop.unref();
+  });
 }
 
 function showMainWindow(){
@@ -112,9 +162,9 @@ function shutdown(){
   if(quitting)return;
   quitting=true;
   controlServer?.close();
-  stopServer();
-  forceExitTimer=setTimeout(()=>app.exit(0),2500);
-  app.quit();
+  forceExitTimer=setTimeout(()=>app.exit(0),4000);
+  forceExitTimer.unref();
+  stopServer().finally(()=>app.exit(0));
 }
 
 function startControlServer(){
@@ -139,11 +189,9 @@ function startControlServer(){
 
 function failAndQuit(message){
   if(quitting)return;
-  quitting=true;
   console.error(message);
   if(app.isReady())dialog.showErrorBox('Fast GPU 启动失败',message);
-  stopServer();
-  app.quit();
+  shutdown();
 }
 
 function createWindow(){
@@ -207,6 +255,7 @@ ipcMain.handle('window:toggle-maximize',event=>{
 });
 ipcMain.handle('window:is-maximized',event=>Boolean(electronWindowFor(event)?.isMaximized()));
 ipcMain.handle('window:close',event=>electronWindowFor(event)?.close());
+ipcMain.handle('conflict:choice',()=>{ conflictResolver?.(); return true; });
 ipcMain.handle('dialog:pick-directory',async event=>{
   const window=electronWindowFor(event);
   if(!window)return null;
@@ -218,6 +267,12 @@ ipcMain.handle('dialog:pick-files',async event=>{
   if(!window)return [];
   const result=await dialog.showOpenDialog(window,{title:'选择要上传到对象存储的文件',properties:['openFile']});
   return result.canceled?[]:result.filePaths;
+});
+ipcMain.handle('dialog:pick-startup-script',async event=>{
+  const window=electronWindowFor(event);
+  if(!window)return null;
+  const result=await dialog.showOpenDialog(window,{title:'选择本地启动脚本',properties:['openFile'],filters:[{name:'Shell 脚本',extensions:['sh']},{name:'所有文件',extensions:['*']}]});
+  return result.canceled?null:result.filePaths[0]||null;
 });
 function storageFiles(root){
   const files=[];
@@ -257,6 +312,7 @@ if(!app.requestSingleInstanceLock()){
     try{
       createWindow();
       if(allInOne){
+        await ensureLocalPortAvailable();
         startServer();
         await waitUntilReady();
       }
@@ -269,11 +325,15 @@ if(!app.requestSingleInstanceLock()){
   });
 }
 
-app.on('before-quit',()=>{
-  quitting=true;
+app.on('before-quit',(event)=>{
+  if(!quitting){
+    event.preventDefault();
+    shutdown();
+    return;
+  }
   controlServer?.close();
   stopServer();
-  if(!forceExitTimer)forceExitTimer=setTimeout(()=>app.exit(0),2500);
+  if(!forceExitTimer)forceExitTimer=setTimeout(()=>app.exit(0),4000);
 });
 
 app.on('window-all-closed',()=>app.quit());

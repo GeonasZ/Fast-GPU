@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "start": "node server.js",
-    "start:web": "node server.js",
+    "start": "node --env-file-if-exists=.env server.js",
+    "start:web": "node --env-file-if-exists=.env server.js",
     "start:local": "node client.js",
     "start:all": "node local-launcher.js",
     "stop:all": "node local-launcher.js --stop",

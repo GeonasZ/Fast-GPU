@@ -49,28 +49,8 @@ with open(path, 'w', encoding='utf-8') as file:
     json.dump(profile, file)
 PY
 }
-repair_npm_command() {
-  local package_name="$1" command_name="$2" package_dir bin_relative prefix
-  package_dir="$(npm root -g)/$package_name"
-  [[ -f "$package_dir/package.json" ]] || return 1
-  bin_relative="$(node - "$package_dir/package.json" "$command_name" <<'NODE'
-const fs = require('fs');
-const [manifest, command] = process.argv.slice(2);
-const value = JSON.parse(fs.readFileSync(manifest, 'utf8')).bin;
-const target = typeof value === 'string' ? value : value?.[command] || Object.values(value || {})[0];
-if (!target) process.exit(1);
-process.stdout.write(target);
-NODE
-)" || return 1
-  [[ -f "$package_dir/$bin_relative" ]] || return 1
-  prefix="$(npm config get prefix)"
-  install -d -m 0755 "$prefix/bin"
-  chmod a+x "$package_dir/$bin_relative"
-  ln -sfn "$package_dir/$bin_relative" "$prefix/bin/$command_name"
-  hash -r
-  command -v "$command_name" >/dev/null 2>&1
-}
 start_ssh_early() {
+  [[ "${FLEET_SKIP_SSH_SETUP:-0}" == "1" ]] && return 0
   profile provisioning starting_ssh '正在启动 SSH 连接服务'
   if [[ -x /opt/fast-gpu/ensure-ssh.sh ]]; then
     /opt/fast-gpu/ensure-ssh.sh
@@ -106,29 +86,7 @@ EOF
   timeout 5 ssh-keyscan -p "${FLEET_SSH_PORT:-22}" 127.0.0.1 >/dev/null 2>&1
   printf '%s\n' bootstrap > /var/lib/fast-gpu/ssh-autostart-mode
 }
-install_runtime_dependencies() {
-  profile provisioning installing_runtime_dependencies '正在构建运行环境并安装平台依赖'
-  apt-get update
-  apt-get install -y --no-install-recommends \
-    ca-certificates curl jq pciutils git python3 python3-pip openssh-server iproute2 tini \
-    fio iperf3 nvme-cli cmake build-essential rclone rsync libboost-program-options-dev
-  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-    apt-get install -y --no-install-recommends nodejs
-  fi
-  if ! command -v nvbandwidth >/dev/null 2>&1; then
-    rm -rf /tmp/nvbandwidth
-    git clone --depth 1 https://github.com/NVIDIA/nvbandwidth.git /tmp/nvbandwidth
-    cmake -S /tmp/nvbandwidth -B /tmp/nvbandwidth/build \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90;100"
-    cmake --build /tmp/nvbandwidth/build -j"$(nproc)"
-    install /tmp/nvbandwidth/build/nvbandwidth /usr/local/bin/nvbandwidth
-    rm -rf /tmp/nvbandwidth
-  fi
-  rm -rf /var/lib/apt/lists/*
-}
-trap 'code=$?; profile failed failed "初始化失败（退出码 $code）"; exit $code' ERR
+trap 'code=$?; trap - ERR; start_ssh_early >/dev/null 2>&1 || true; profile failed failed "初始化失败（退出码 $code）"; exit $code' ERR
 start_ssh_early
 if [[ "${FLEET_RECOVERY_ONLY:-0}" == "1" ]]; then
   profile ready recovered '远端 SSH 与遥测连接已恢复'
@@ -142,13 +100,6 @@ expected_cuda_major="${FLEET_EXPECTED_CUDA_MAJOR:-13}"
 if ! command -v nvcc >/dev/null 2>&1 || [[ "$(nvcc --version | sed -n 's/.*release \([0-9]*\).*/\1/p' | tail -1)" != "$expected_cuda_major" ]]; then
   fail 21 "Fast GPU expected CUDA ${expected_cuda_major}.x but the selected container does not provide it."
 fi
-if [[ "${FLEET_PREBUILT_IMAGE:-0}" != "1" ]]; then install_runtime_dependencies; fi
-profile provisioning installing_developer_tools '正在安装开发工具（Codex 与 Claude Code）'
-npm install -g --bin-links=true @openai/codex@latest @anthropic-ai/claude-code@latest
-command -v codex >/dev/null 2>&1 || repair_npm_command '@openai/codex' codex || fail 24 "Codex CLI 安装完成但命令不可用"
-command -v claude >/dev/null 2>&1 || repair_npm_command '@anthropic-ai/claude-code' claude || fail 25 "Claude Code 安装完成但命令不可用"
-codex --version
-claude --version
 profile provisioning verifying_gpu '正在验证云实例 GPU'
 command -v nvidia-smi >/dev/null 2>&1 || fail 22 "NVIDIA runtime is unavailable in the cloud instance"
 nvidia-smi >/dev/null
@@ -160,19 +111,7 @@ assert float((x * 2).sum()) == 512.0, 'PyTorch GPU calculation failed'
 print('torch', torch.__version__, 'cuda', torch.version.cuda, 'gpu', torch.cuda.get_device_name(0))
 PY
 run_configured_startup() {
-  local download_dir=/opt/fast-gpu/startup-downloads script_path=/opt/fast-gpu/startup-config.sh
-  if [[ -n "${FLEET_STARTUP_DOWNLOADS_B64:-}" ]]; then
-    profile provisioning startup_downloads '正在下载开机配置文件'
-    install -d -m 0755 "$download_dir"
-    python3 - "$download_dir" <<'PY'
-import base64, json, os, sys, urllib.parse, urllib.request
-target = sys.argv[1]
-items = json.loads(base64.b64decode(os.environ['FLEET_STARTUP_DOWNLOADS_B64']))
-for index, url in enumerate(items):
-    name = os.path.basename(urllib.parse.urlparse(url).path) or f'download-{index + 1}'
-    urllib.request.urlretrieve(url, os.path.join(target, name))
-PY
-  fi
+  local script_path=/opt/fast-gpu/startup-config.sh
   if [[ -n "${FLEET_STARTUP_SCRIPT_B64:-}" ]]; then
     profile provisioning startup_script '正在执行开机配置脚本'
     printf '%s' "$FLEET_STARTUP_SCRIPT_B64" | base64 -d > "$script_path"
@@ -181,9 +120,13 @@ PY
   fi
 }
 run_configured_startup
+profile provisioning ensuring_ssh '正在检测并配置系统必需的 SSH 服务'
+start_ssh_early
 profile provisioning starting_agent '正在启动监控 Agent'
 if [[ -n "${FLEET_AGENT_BUNDLE_URL:-}" ]]; then
   curl -fsSL "$FLEET_AGENT_BUNDLE_URL" | tar -xz -C /opt/fast-gpu
+elif [[ -s /opt/fast-gpu/agent.js ]]; then
+  : # SSH provisioning uploads the agent alongside this script.
 elif [[ -n "${BASE_URL:-}" ]]; then
   curl -fsSL "${BASE_URL%/}/provision/agent.js" -o /opt/fast-gpu/agent.js
 fi

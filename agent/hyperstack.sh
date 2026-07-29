@@ -6,10 +6,7 @@ install -d -m 0755 "$state_dir" /data/datasets/fineweb
 exec > >(tee -a "$state_dir/provision.log") 2>&1
 
 report() {
-  [[ -n "${FLEET_PROVISION_STATUS_URL:-}" && -n "${FLEET_PROVISION_TOKEN:-}" ]] || return 0
-  curl -fsS --retry 3 -X POST -H 'content-type: application/json' \
-    --data "{\"token\":\"$FLEET_PROVISION_TOKEN\",\"status\":\"$1\",\"message\":\"${2:-}\",\"cudaLabel\":\"${cuda_label:-}\",\"driver\":\"${driver:-}\",\"containerImage\":\"${image:-}\"}" \
-    "$FLEET_PROVISION_STATUS_URL" || true
+  printf '%s\n' "$1" > "$state_dir/provision.phase"
 }
 
 fail() {
@@ -67,6 +64,50 @@ else
 fi
 pgrep -x sshd >/dev/null || fail "SSH startup verification failed"
 timeout 5 ssh-keyscan -p "$ssh_port" 127.0.0.1 >/dev/null 2>&1 || fail "SSH handshake verification failed"
+
+ensure_vm_ssh_final() {
+  if ! command -v sshd >/dev/null 2>&1; then
+    apt-get update
+    apt-get install -y --no-install-recommends openssh-server
+  fi
+  install -d -m 0755 /etc/ssh/sshd_config.d /run/sshd
+  cat > /etc/ssh/sshd_config.d/60-fast-gpu.conf <<EOF
+Port ${ssh_port}
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+PermitRootLogin no
+EOF
+  ssh-keygen -A
+  sshd -t
+  if command -v systemctl >/dev/null 2>&1 && [[ "$(ps -p 1 -o comm= 2>/dev/null || true)" == "systemd" ]]; then
+    systemctl enable --now ssh
+    systemctl restart ssh
+  else
+    command -v update-rc.d >/dev/null 2>&1 && update-rc.d ssh defaults >/dev/null
+    service ssh restart
+  fi
+  pgrep -x sshd >/dev/null
+  timeout 5 ssh-keyscan -p "$ssh_port" 127.0.0.1 >/dev/null 2>&1
+}
+
+run_vm_startup() {
+  local script_path=/opt/fast-gpu/vm-startup-config.sh
+  if [[ -n "${FLEET_VM_STARTUP_SCRIPT_B64:-}" ]]; then
+    printf '%s' "$FLEET_VM_STARTUP_SCRIPT_B64" | base64 -d > "$script_path" || return
+    chmod 0700 "$script_path" || return
+    bash "$script_path" || return
+  fi
+}
+
+report vm_startup
+if ! run_vm_startup; then
+  ensure_vm_ssh_final || true
+  fail "VM startup behavior failed"
+fi
+report ensuring_vm_ssh
+ensure_vm_ssh_final || fail "SSH final verification failed after VM startup behavior"
 
 validate_image() {
   local candidate="$1"
@@ -127,13 +168,20 @@ fi
 
 docker rm -f fast-gpu-runtime >/dev/null 2>&1 || true
 report starting_runtime
-env_args=(-e "FLEET_EXPECTED_CUDA_MAJOR=$cuda_major")
-for key in FLEET_AGENT_ID FLEET_AGENT_SECRET BASE_URL FLEET_AGENT_BUNDLE_URL FLEET_PROVIDER FLEET_INSTANCE_NAME FLEET_TELEMETRY_PUSH_URL FLEET_STARTUP_SCRIPT_B64 FLEET_STARTUP_DOWNLOADS_B64 STORAGE_PRIMARY_PROVIDER R2_S3_ENABLED R2_S3_ENDPOINT R2_S3_BUCKET R2_S3_PREFIX R2_S3_REGION R2_S3_ACCESS_KEY_ID R2_S3_SECRET_ACCESS_KEY OSS_S3_ENABLED OSS_S3_ENDPOINT OSS_S3_BUCKET OSS_S3_PREFIX OSS_S3_REGION OSS_S3_ACCESS_KEY_ID OSS_S3_SECRET_ACCESS_KEY; do
+install -d -m 0755 /opt/fast-gpu
+[[ -s "${FLEET_LOCAL_BOOTSTRAP_PATH:-}" ]] || fail "Local bootstrap script is missing"
+[[ -s "${FLEET_LOCAL_AGENT_PATH:-}" ]] || fail "Local telemetry agent is missing"
+install -m 0755 "$FLEET_LOCAL_BOOTSTRAP_PATH" /opt/fast-gpu/bootstrap.sh
+install -m 0644 "$FLEET_LOCAL_AGENT_PATH" /opt/fast-gpu/agent.js
+env_args=(-e "FLEET_EXPECTED_CUDA_MAJOR=$cuda_major" -e "FLEET_SKIP_SSH_SETUP=1")
+for key in FLEET_AGENT_ID FLEET_AGENT_SECRET BASE_URL FLEET_AGENT_BUNDLE_URL FLEET_PROVIDER FLEET_INSTANCE_NAME FLEET_TELEMETRY_PUSH_URL FLEET_STARTUP_SCRIPT_B64 STORAGE_PRIMARY_PROVIDER R2_S3_ENABLED R2_S3_ENDPOINT R2_S3_BUCKET R2_S3_PREFIX R2_S3_REGION R2_S3_ACCESS_KEY_ID R2_S3_SECRET_ACCESS_KEY OSS_S3_ENABLED OSS_S3_ENDPOINT OSS_S3_BUCKET OSS_S3_PREFIX OSS_S3_REGION OSS_S3_ACCESS_KEY_ID OSS_S3_SECRET_ACCESS_KEY; do
   [[ -n "${!key:-}" ]] && env_args+=(-e "$key=${!key}")
 done
 docker run -d --name fast-gpu-runtime --restart unless-stopped --gpus all --network host \
-  -v /data:/data -v "$state_dir:/var/lib/fast-gpu" "${env_args[@]}" \
-  "$image" bash -lc 'curl -fsSL --retry 5 "${BASE_URL%/}/provision/bootstrap.sh" -o /tmp/bootstrap.sh; bash /tmp/bootstrap.sh; if [ "$(ps -p 1 -o comm= | tr -d " ")" = tini ]; then exec sleep infinity; elif command -v tini >/dev/null 2>&1; then exec tini -g -- sleep infinity; else exec sleep infinity; fi'
+  -v /data:/data -v "$state_dir:/var/lib/fast-gpu" \
+  -v /opt/fast-gpu/bootstrap.sh:/opt/fast-gpu/bootstrap.sh:ro \
+  -v /opt/fast-gpu/agent.js:/opt/fast-gpu/agent.js:ro "${env_args[@]}" \
+  "$image" bash -lc 'bash /opt/fast-gpu/bootstrap.sh; if [ "$(ps -p 1 -o comm= | tr -d " ")" = tini ]; then exec sleep infinity; elif command -v tini >/dev/null 2>&1; then exec tini -g -- sleep infinity; else exec sleep infinity; fi'
 report installing_dependencies
 
 health_args=()

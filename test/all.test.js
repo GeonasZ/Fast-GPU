@@ -9,3 +9,4 @@ require('./transfer-paths.test');
 require('./object-storage.test');
 require('./instance-actions.test');
 require('./electron-titlebar.test');
+require('./local-port.test');

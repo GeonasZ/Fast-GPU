@@ -9,23 +9,20 @@ const frontendSource = () => require('./frontend-source')(root);
 
 test('runtime image leaves fast-moving developer CLIs to instance bootstrap', () => {
   const dockerfile = read('Dockerfile.runtime');
-  assert.match(dockerfile, /FLEET_PREBUILT_IMAGE=1/);
+  assert.doesNotMatch(dockerfile, /FLEET_PREBUILT_IMAGE/);
   assert.doesNotMatch(dockerfile, /@openai\/codex/);
   assert.doesNotMatch(dockerfile, /@anthropic-ai\/claude-code/);
-  const bootstrap = read('agent/bootstrap.sh');
-  assert.match(bootstrap, /@openai\/codex@latest/);
-  assert.match(bootstrap, /@anthropic-ai\/claude-code@latest/);
+  const profiles = read('lib/image-profile-store.js');
+  assert.match(profiles, /@openai\/codex@latest/);
+  assert.match(profiles, /@anthropic-ai\/claude-code@latest/);
 });
 
-test('bootstrap installs dependencies for an on-demand image and checks the cloud GPU', () => {
+test('bootstrap delegates installs to the selected profile and checks the cloud GPU', () => {
   const bootstrap = read('agent/bootstrap.sh');
-  const dockerfile = read('Dockerfile.runtime');
-  assert.match(bootstrap, /FLEET_PREBUILT_IMAGE:-0/);
-  assert.match(bootstrap, /install_runtime_dependencies/);
   assert.match(bootstrap, /profile failed failed/);
-  assert.match(bootstrap, /installing_runtime_dependencies/);
-  assert.match(bootstrap, /rclone rsync/);
-  assert.match(bootstrap, /npm install -g/);
+  assert.match(bootstrap, /run_configured_startup/);
+  assert.doesNotMatch(bootstrap, /install_runtime_dependencies/);
+  assert.doesNotMatch(bootstrap, /npm install -g/);
   assert.doesNotMatch(bootstrap, /FLEET_VERIFY_GPU=1 \/opt\/fast-gpu\/verify-image\.sh/);
   assert.match(bootstrap, /command -v nvidia-smi/);
   assert.match(bootstrap, /nvidia-smi >\/dev\/null/);
@@ -41,33 +38,10 @@ test('rsync is available on new runtimes and repaired on existing instances', ()
   assert.match(server, /apt-get install -y --no-install-recommends rsync/);
 });
 
-test('runtime repository derives all supported prebuilt image tags', () => {
-  const {runtimeImages} = require('../lib/runtime-images');
-  const images = runtimeImages({FLEET_RUNTIME_IMAGE_REPOSITORY: 'ghcr.io/example/runtime'});
-  assert.equal(images[0].image, 'ghcr.io/example/runtime:pytorch-2.11-cuda13.2-ngc26.03');
-  assert.equal(images[0].buildMode, 'prebuilt');
-  assert.equal(images[1].image, 'ghcr.io/example/runtime:pytorch-2.10-cuda13.1-ngc26.01');
-  assert.equal(images[1].buildMode, 'prebuilt');
-  assert.equal(images[2].image, 'ghcr.io/example/runtime:pytorch-2.7-cuda12.8-ngc25.03');
-  assert.equal(images[2].buildMode, 'prebuilt');
-});
-
-test('default runtime catalog exposes exactly three presets', () => {
-  const {runtimeImages} = require('../lib/runtime-images');
-  const images = runtimeImages({});
-  assert.equal(images.length, 3);
-  assert.deepEqual(images.map(image => image.id), [
-    'pytorch-2.11-cuda13.2',
-    'pytorch-2.10-cuda13.1',
-    'pytorch-2.7-cuda12.8',
-  ]);
-});
-
 test('custom Docker image references are validated separately from presets', () => {
   const {resolveCustomRuntimeImage} = require('../lib/runtime-images');
   const image = resolveCustomRuntimeImage('ghcr.io/example/training:latest', 13);
   assert.equal(image.image, 'ghcr.io/example/training:latest');
-  assert.equal(image.buildMode, 'custom');
   assert.equal(image.cudaMajor, 13);
   assert.equal(resolveCustomRuntimeImage('ubuntu:24.04', 12).image, 'ubuntu:24.04');
   assert.throws(
@@ -80,34 +54,15 @@ test('custom Docker image references are validated separately from presets', () 
   );
 });
 
-test('default catalog distinguishes published platform images from startup-configured NGC images', () => {
-  const {runtimeImages, resolveRuntimeImage} = require('../lib/runtime-images');
-  const images = runtimeImages({});
-  assert.deepEqual(
-    images.slice(0, 3).map(({image, buildMode}) => ({image, buildMode})),
-    [
-      {image: 'ghcr.io/geonasz/gpu-scheduling-platform-runtime:pytorch-2.11-cuda13.2-ngc26.03', buildMode: 'prebuilt'},
-      {image: 'ghcr.io/geonasz/gpu-scheduling-platform-runtime:pytorch-2.10-cuda13.1-ngc26.01', buildMode: 'prebuilt'},
-      {image: 'ghcr.io/geonasz/gpu-scheduling-platform-runtime:pytorch-2.7-cuda12.8-ngc25.03', buildMode: 'prebuilt'},
-    ],
-  );
-  assert.ok(images.every(item => !item.buildModeLabel.includes('临时')));
-  assert.ok(images.every(item =>
-    JSON.stringify(item.availableBuildModes) === JSON.stringify(['prebuilt', 'on-demand'])
-  ));
-  assert.equal(
-    resolveRuntimeImage(images[0].id, {}, 'on-demand').image,
-    'nvcr.io/nvidia/pytorch:26.03-py3',
-  );
-});
-
 test('launch UI submits a persisted image startup profile', () => {
   const app = frontendSource();
   const html = read('public/index.html');
   const server = read('server.js');
-  assert.match(html, /id="imageBuildMode"/);
+  assert.doesNotMatch(html, /id="imageBuildMode"/);
   assert.match(app, /request\("\/api\/image-profiles"\)/);
-  assert.match(app, /imageProfileId:\s*selected\.provider/);
+  assert.match(app, /imageProfileId:/);
+  assert.match(app, /selected\.provider === "hyperstack" \? undefined : \$\("#dockerProfile"\)\.value/);
+  assert.match(app, /vmProfileId:/);
   assert.match(server, /imageProfileStore\.get\(d\.imageProfileId\)/);
   assert.match(app, /startupScriptFile/);
   assert.match(app, /loadPresetStartupScript/);
@@ -149,15 +104,15 @@ test('runtime installs SSH and verifies startup with init-system fallbacks', () 
 
 test('runtime uses a lightweight init to forward signals and reap child processes', () => {
   const dockerfile = read('Dockerfile.runtime');
-  const bootstrap = read('agent/bootstrap.sh');
+  const profiles = read('lib/image-profile-store.js');
   const provisioning = read('lib/provisioning.js');
   const providers = read('lib/providers.js');
   const minimalSsh = read('lib/provider-startup/minimal-ssh.js');
   const hyperstack = read('agent/hyperstack.sh');
   assert.match(dockerfile, /\btini\b/);
   assert.match(dockerfile, /ENTRYPOINT \["\/usr\/bin\/tini", "-g", "--"\]/);
-  assert.match(bootstrap, /\btini\b/);
-  for (const generator of ['ppioStartupCommand','autodlStartupCommand','runpodStartupCommand','hyperstackStartup']) {
+  assert.match(profiles, /\btini\b/);
+  for (const generator of ['ppioStartupCommand','autodlStartupCommand','runpodStartupCommand']) {
     assert.match(providers, new RegExp(generator));
   }
   for (const startup of [provisioning, hyperstack]) {
@@ -168,20 +123,33 @@ test('runtime uses a lightweight init to forward signals and reap child processe
   assert.match(minimalSsh, /exec sleep infinity/);
 });
 
+test('Hyperstack provisioning is uploaded over SSH without a public control-plane URL', () => {
+  const server = read('server.js');
+  const providers = read('lib/providers.js');
+  const hyperstack = read('agent/hyperstack.sh');
+  assert.match(server, /provisionHyperstackViaSsh/);
+  assert.match(server, /FLEET_LOCAL_BOOTSTRAP_PATH/);
+  assert.doesNotMatch(server, /FLEET_BOOTSTRAP_URL|hyperstack-status/);
+  assert.match(providers, /user_data/);
+  assert.match(hyperstack, /\/opt\/fast-gpu\/bootstrap\.sh/);
+  assert.doesNotMatch(hyperstack, /FLEET_PROVISION_STATUS_URL|\/provision\/bootstrap\.sh/);
+});
+
 test('bootstrap starts SSH before validating the provider image', () => {
   const bootstrap = read('agent/bootstrap.sh');
-  const start = bootstrap.lastIndexOf('\nstart_ssh_early\n');
+  const start = bootstrap.indexOf('\nstart_ssh_early\n');
   assert.ok(start > 0);
   assert.ok(start < bootstrap.indexOf('\nsource /etc/os-release\n'));
   assert.ok(start < bootstrap.indexOf('expected_cuda_major='));
   assert.match(bootstrap, /command -v python3[^]*?\|\| return 0/);
+  assert.ok(bootstrap.lastIndexOf('\nstart_ssh_early\n') > bootstrap.indexOf('\nrun_configured_startup\n'));
 });
 
 test('platform restart recovery does not rerun CUDA provisioning and failed runtimes keep SSH probing', () => {
   const bootstrap = read('agent/bootstrap.sh');
   const server = read('server.js');
   const recovery = bootstrap.indexOf('FLEET_RECOVERY_ONLY');
-  assert.ok(recovery > bootstrap.lastIndexOf('\nstart_ssh_early\n'));
+  assert.ok(recovery > bootstrap.indexOf('\nstart_ssh_early\n'));
   assert.ok(recovery < bootstrap.indexOf('expected_cuda_major='));
   assert.match(server, /reinjectTelemetryAgent\(providerId, id, \{ recoveryOnly: true \}\)/);
   assert.match(bootstrap, /远端 SSH 与遥测连接已恢复/);
@@ -318,6 +286,8 @@ test('provider-side deletion and startup reconciliation purge stale instance art
   assert.match(server, /telemetryDiagnostics\.delete/);
   assert.match(server, /function reconcileProviderInventory/);
   assert.match(server, /failedProviders\.has/);
+  assert.match(server, /Never destroy durable SSH keys based/);
+  assert.match(server, /confirmedMissing = deleteConfirmed \|\| billing\?\.status === "terminated"/);
   assert.match(server, /启动后实例与凭据对账失败/);
 });
 

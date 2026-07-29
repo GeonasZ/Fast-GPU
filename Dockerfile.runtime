@@ -6,8 +6,7 @@ ARG NVBANDWIDTH_REF=main
 LABEL org.opencontainers.image.title="Fast GPU runtime" \
       org.opencontainers.image.description="Prebuilt Fast GPU validation and development runtime"
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    FLEET_PREBUILT_IMAGE=1
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \

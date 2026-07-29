@@ -1,0 +1,185 @@
+.startup-actions {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #b9dfc8;
+  border-radius: 8px;
+  background: #f4fbf7;
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.startup-actions-head strong,
+.startup-actions-head small {
+  display: block;
+}
+
+.startup-actions-head strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.startup-actions-head small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.startup-actions .script-toolbar {
+  padding-top: 12px;
+  border-top: 1px solid #d8e9df;
+}
+
+#imageInstallPlan span {
+  max-width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+#imageInstallPlan b {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.script-source-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.image-create-actions {
+  display: flex;
+  gap: 8px;
+}
+.behavior-profile-group {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+.behavior-profile-group + .behavior-profile-group {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.behavior-profile-group > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 32px;
+  padding: 6px 9px;
+  border: 1px solid #b8cfea;
+  border-radius: 6px;
+  background: #edf5ff;
+  box-shadow: inset 3px 0 0 #3978bd;
+}
+.behavior-profile-group:nth-child(2) > header {
+  border-color: #a9c3e3;
+  background: #e7f1fc;
+  box-shadow: inset 3px 0 0 #2f6fad;
+}
+.behavior-profile-group > header strong { font-size: 12px; }
+.behavior-profile-group > header small { color: var(--muted); font-size: 10px; }
+.behavior-profile-group > button {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.behavior-profile-group > button.active {
+  border-color: #58b77e;
+  box-shadow: inset 3px 0 #25c46a;
+}
+.system-install-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  border: 1px solid #b7dfc8;
+  border-radius: 5px;
+  background: #e7f8ee;
+  font-size: 11px;
+}
+.system-install-step b { color: #147f46; }
+.script-source-control select {
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+.local-startup-script-drop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 16px;
+  border: 1px dashed #9aaba1;
+  border-radius: 7px;
+  background: #f8faf9;
+}
+.local-startup-script-drop[hidden] { display: none; }
+.local-startup-script-drop.dragging {
+  outline: 2px solid #25c46a;
+  background: #eefaf3;
+}
+.local-startup-script-drop div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.local-startup-script-drop code {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.local-startup-script-drop button {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.local-startup-script-drop > small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+.local-file-bubble,
+.image-profile-list b.missing-local-file {
+  padding: 3px 7px;
+  border: 1px solid #fda29b;
+  border-radius: 20px;
+  background: #fee4e2;
+  color: #b42318;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.image-profile-list > button:has(.missing-local-file) { border-color: #fda29b; }
+.local-file-hint {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 5px;
+  padding: 3px 8px;
+  border: 1px solid #fda29b;
+  border-radius: 20px;
+  background: #fee4e2;
+  color: #b42318 !important;
+}
+@media (max-width: 700px) {
+  .local-startup-script-drop { grid-template-columns: 1fr; }
+  .local-startup-script-drop > small { grid-column: auto; }
+  .local-startup-script-drop div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

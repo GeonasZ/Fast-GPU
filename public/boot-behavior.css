@@ -1,0 +1,25 @@
+.boot-behavior-panel {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid #71d49b;
+  border-radius: 8px;
+  background: #f1fbf5;
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.boot-behavior-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.boot-behavior-head > span { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 7px; background: var(--dark); color: #fff; font-size: 16px; font-weight: 700; }
+.boot-behavior-head strong, .boot-behavior-head small { display: block; }
+.boot-behavior-head strong { color: var(--ink); font-size: 13px; }
+.boot-behavior-head small { color: var(--muted); font-size: 10px; }
+.boot-behavior-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.boot-behavior-fields label:only-child { grid-column: 1 / -1; }
+.boot-behavior-fields:has(#vmProfileWrap[hidden]) > label:not([hidden]) { grid-column: 1 / -1; }
+.boot-behavior-fields select { width: 100%; min-width: 0; border: 1px solid #bddfca; border-radius: 7px; background: #fff; color: var(--ink); padding: 10px; }
+.boot-behavior-fields label > small { min-height: 16px; line-height: 1.35; }
+.boot-behavior-fields label[hidden] { display: none; }
+#providerImageWrap[hidden] { display: none; }
+
+@media (max-width: 620px) {
+  .boot-behavior-fields { grid-template-columns: 1fr; }
+}

@@ -142,7 +142,8 @@
 .storage-auto-install input { width: auto; margin: 0; padding: 0; }
 .existing-storage > small { grid-column: 1 / -1; }
 @media (max-width: 1200px) { .existing-storage { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.storage-settings { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.storage-settings { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
+.storage-settings .storage-summary-actions { margin-left: auto; }
 .storage-settings #s3Status { max-width: 58%; white-space: normal; text-align: right; }
 .storage-settings p, .s3-actions small { color: var(--muted); }
 .storage-disclosure { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
@@ -152,15 +153,35 @@
 .storage-disclosure[open] > summary::after { transform: rotate(-90deg); }
 .storage-disclosure > summary span { font-size: 14px; font-weight: 700; }
 .storage-disclosure > summary small { color: var(--muted); font-size: 12px; }
+.storage-summary-actions { display: flex; gap: 7px; margin-left: auto; }
+.storage-summary-actions button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: #fff; cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
+.storage-summary-actions button.has-profile { color: #176535; border-color: #b9d7c7; background: #eef7f2; }
+.storage-summary-actions button:hover { border-color: #176b42; background: #f0f8f3; }
 .storage-disclosure[open] > summary { border-bottom: 1px solid var(--line); }
 .storage-disclosure > .table-card, .storage-disclosure > form > .table-card { border: 0; border-radius: 0; box-shadow: none; }
 .storage-disclosure > form { padding: 16px; }
 .storage-disclosure .storage-provider-grid { margin: 0; }
 .storage-disclosure .existing-storage, .storage-disclosure .storage-browser, .storage-disclosure .storage-upload-card { margin-top: 0; }
 .storage-provider-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.storage-unavailable { margin-top: 12px; padding: 28px 20px; color: var(--muted); text-align: center; }
 .s3-form { min-width: 0; margin: 0; padding: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .s3-form .s3-legend { width: 100%; grid-column: 1 / -1; padding: 0 0 18px; margin-bottom: 6px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .s3-form .s3-legend > span { display: grid; gap: 8px; min-width: 0; }
+.storage-profile-manager { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(150px, 1fr) minmax(180px, 1fr) auto; gap: 10px; align-items: end; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #f6f8f7; }
+.storage-profile-manager.storage-profile-empty { grid-template-columns: 1fr auto; }
+.storage-profile-summary { min-width: 0; display: grid; gap: 3px; align-content: center; }
+.storage-profile-summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storage-profile-summary small { color: var(--muted); }
+.storage-profile-picker[hidden] { display: none; }
+.storage-profile-manager label { display: grid; gap: 5px; min-width: 0; }
+.storage-profile-manager select, .storage-profile-manager input { width: 100%; min-width: 0; box-sizing: border-box; padding: 9px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.storage-profile-editor { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.storage-profile-editor[hidden] { display: none; }
+.storage-profile-editor-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; padding-top: 2px; }
+.storage-profile-actions { display: flex; gap: 7px; }
+.storage-profile-actions button { min-height: 38px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; }
+.storage-profile-actions .danger { color: #b42318; border-color: #e3b7b2; }
+.storage-profile-actions button:disabled { color: var(--muted); border-color: var(--line); background: #edf1ef; cursor: not-allowed; }
 .s3-form .s3-legend .storage-provider-actions { display: flex; grid-auto-flow: initial; align-items: center; gap: 10px; flex-shrink: 0; }
 .storage-console-link { padding: 6px 9px; color: #176b42; background: #eef7f2; border: 1px solid #b9d7c7; border-radius: 7px; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .storage-console-link:hover { color: #fff; background: #176b42; border-color: #176b42; }
@@ -313,11 +334,11 @@
 .instance-actions [data-ssh].ssh-dormant { border-color: var(--line); color: var(--muted); cursor: default; }
 .ssh-pending-state { display: grid; gap: 5px; margin-top: 14px; padding: 14px; border: 1px solid #ead9ac; border-radius: 8px; background: #fffbf0; color: #70571c; }
 .ssh-pending-state small { color: inherit; }
-@media (max-width: 800px) { .ssh-transfer-columns, .transfer-row, .storage-provider-grid, .s3-form { grid-template-columns: 1fr; } .s3-actions { align-items: stretch; flex-direction: column; } .storage-settings { align-items: flex-start; gap: 12px; flex-direction: column; } .storage-settings #s3Status { max-width: 100%; text-align: left; } #sshDialog { width: calc(100vw - 28px); } }
+@media (max-width: 800px) { .ssh-transfer-columns, .transfer-row, .storage-provider-grid, .s3-form, .storage-profile-manager, .storage-profile-editor { grid-template-columns: 1fr; } .s3-actions { align-items: stretch; flex-direction: column; } .storage-settings { align-items: flex-start; gap: 12px; flex-direction: column; } .storage-settings #s3Status { max-width: 100%; text-align: left; } #sshDialog { width: calc(100vw - 28px); } }
 @media (max-width: 800px) { #storageUploadForm { grid-template-columns: 1fr; } .storage-upload-item { align-items: stretch; flex-direction: column; } .storage-upload-item > div:last-child { justify-content: flex-end; } }
 @media (max-width: 800px) { .storage-box-options { grid-template-columns: 1fr; } .storage-compress-toggle { grid-template-columns: auto 1fr !important; } }
 @media (max-width: 800px) { .storage-browser-controls { grid-template-columns: 1fr; } .storage-browser-row { grid-template-columns: 40px minmax(0, 1fr); } .storage-browser-row > small { grid-column: 2; white-space: normal; } }
-@media (max-width: 800px) { .storage-disclosure > summary { align-items: flex-start; flex-direction: column; padding-right: 42px; position: relative; } .storage-disclosure > summary::after { position: absolute; right: 18px; top: 16px; } }
+@media (max-width: 800px) { .storage-disclosure > summary { align-items: flex-start; flex-direction: column; padding-right: 42px; position: relative; } .storage-disclosure > summary::after { position: absolute; right: 18px; top: 16px; } .storage-summary-actions { margin-left: 0; flex-wrap: wrap; } }
 @media (max-width: 800px) { .sync-paths { grid-template-columns: 1fr; } .sync-path-arrow { display: none; } }
 /* Compress-before-transfer toggle (SCP upload and rsync/rclone sync panels) */
 .compress-toggle { display: flex; align-items: center; gap: 8px; grid-column: 1 / -1; margin: 2px 0 6px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }

@@ -628,9 +628,9 @@ loadInstances = async function () {
        reachabilityMarkup(reachabilityCache.get(String(i.id))) +
        "</div>" +
        instanceBenchmarkMarkup(i) +
-       '</div></div></div><div class="instance-actions"><span class="sub">' +
+       '</div></div></div><div class="instance-connection-status"><span class="sub">' +
         esc(i.ip || i.accessMessage || "") +
-        '</span><div><button data-expand="' +
+        '</span></div><div class="instance-actions"><div><button data-expand="' +
         id +
         '" aria-expanded="' +
         expanded +

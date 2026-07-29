@@ -48,6 +48,40 @@
   color: var(--muted);
 }
 
+.instance-connection-status {
+  min-height: 34px;
+  margin-top: 14px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fafbfa;
+}
+
+.instance-connection-status .sub {
+  display: block;
+  line-height: 1.35;
+}
+
+.instance-actions {
+  justify-content: flex-end !important;
+  margin-top: 9px !important;
+}
+
+.initialization-failure {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #e9bbb6;
+  color: #862f29;
+}
+
+.initialization-failure span,
+.initialization-failure small {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .adoption-endpoint {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 110px 130px;

@@ -46,8 +46,7 @@ let offers = [],
   instances = [],
   streams = new Map(),
   regionalSelections = new Map(),
-  instancePricingOffers = [],
-  runtimeImages = [];
+  instancePricingOffers = [];
 const telemetryCache = new Map(),
   reachabilityCache = new Map(),
   expandedInstances = new Set(),
@@ -251,18 +250,27 @@ function initializationDetailsMarkup(instance, startedAt) {
       esc(instance.sshDiagnostic.message) +
       "</span></div>"
     : "";
+  const failureMarkup = instance.runtime?.status === "failed"
+    ? '<div class="initialization-failure"><strong>初始化失败原因</strong><span>' +
+      esc(instance.runtime.reason || instance.runtime.message || "未知错误") +
+      (instance.runtime.log && instance.runtime.log !== instance.runtime.reason
+        ? "<small>" + esc(instance.runtime.log) + "</small>"
+        : "") +
+      "</span></div>"
+    : "";
   const timeoutMarkup = timedOut
     ? '<div class="initialization-timeout"><strong>初始化已超过大部分正常安装时间</strong><span>实例仍在持续计费，建议通过 SSH 排障；确认卡住后请删除实例以停止计费。</span><button type="button" data-timeout-delete="' +
       esc(instance.id) +
       '">删除并停止计费</button></div>'
     : "";
-  return providerMarkup || progressMarkup || sshMarkup || timeoutMarkup
+  return providerMarkup || progressMarkup || sshMarkup || failureMarkup || timeoutMarkup
     ? '<div class="initialization-detail' +
         (timedOut ? " timed-out" : "") +
         '">' +
         providerMarkup +
         progressMarkup +
         sshMarkup +
+        failureMarkup +
         timeoutMarkup +
         "</div>"
     : "";

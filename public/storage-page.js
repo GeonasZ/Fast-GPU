@@ -3,6 +3,7 @@ const storageProviderFields = {
     enabled: "#r2Enabled",
     endpoint: "#r2Endpoint",
     bucket: "#r2Bucket",
+    prefix: "#r2Prefix",
     region: "#r2Region",
     accessKey: "#r2AccessKey",
     secretKey: "#r2SecretKey",
@@ -12,6 +13,7 @@ const storageProviderFields = {
     enabled: "#ossEnabled",
     endpoint: "#ossEndpoint",
     bucket: "#ossBucket",
+    prefix: "#ossPrefix",
     region: "#ossRegion",
     accessKey: "#ossAccessKey",
     secretKey: "#ossSecretKey",
@@ -21,6 +23,10 @@ const storageProviderFields = {
 const storageProviderConfigured = Object.fromEntries(
   Object.keys(storageProviderFields).map((provider) => [provider, false]),
 );
+const storageProviderProfiles = Object.fromEntries(
+  Object.keys(storageProviderFields).map((provider) => [provider, []]),
+);
+var storagePageReady = false;
 for (const field of [
   {
     ids: ["#r2Bucket", "#ossBucket"],
@@ -53,7 +59,7 @@ for (const field of [
 
 // <legend> renders in the fieldset border region, so the card header floats
 // over the card edge. Promote it to a normal grid item that lives inside the
-// padded card, and give each provider card its own save button.
+// padded card.
 function normalizeStorageCards() {
   document.querySelectorAll("[data-storage-provider]").forEach((card) => {
     const legend = card.querySelector(":scope > legend");
@@ -63,21 +69,46 @@ function normalizeStorageCards() {
       while (legend.firstChild) head.append(legend.firstChild);
       legend.replaceWith(head);
     }
-    if (!card.querySelector(":scope > .s3-card-actions")) {
-      const footer = document.createElement("div");
-      footer.className = "s3-card-actions";
-      const save = document.createElement("button");
-      save.type = "submit";
-      save.className = "primary";
-      save.textContent = "保存";
-      footer.append(save);
-      card.append(footer);
-    }
   });
 }
 normalizeStorageCards();
-for (const id of ["#r2Prefix", "#ossPrefix"])
-  $(id)?.closest("label")?.remove();
+$("#s3Form > .s3-actions button[type='submit']").hidden = true;
+const globalStorageSave = $("#s3Form > .s3-actions button[type='submit']");
+$("#s3Form > .s3-actions button[type='submit']").textContent = "保存并测试";
+for (const [provider, fields] of Object.entries(storageProviderFields)) {
+  const card = document.querySelector(`[data-storage-provider="${provider}"]`),
+    manager = document.createElement("div");
+  fields.profile = `#${provider}StorageProfile`;
+  fields.name = `#${provider}StorageProfileName`;
+  fields.add = `#${provider}StorageProfileAdd`;
+  fields.remove = `#${provider}StorageProfileRemove`;
+  fields.edit = `#${provider}StorageProfileEdit`;
+  fields.save = `#${provider}StorageProfileSave`;
+  fields.card = card;
+  fields.dirty = false;
+  manager.className = "storage-profile-manager";
+  manager.innerHTML = `<label>配置<select id="${provider}StorageProfile"></select></label><label>配置名称<input id="${provider}StorageProfileName" maxlength="60" placeholder="例如：生产数据"></label><div class="storage-profile-actions"><button id="${provider}StorageProfileAdd" type="button">新增</button><button id="${provider}StorageProfileRemove" class="danger" type="button">删除</button></div>`;
+  manager.querySelector("label").classList.add("storage-profile-picker");
+  card.querySelector(":scope > .s3-legend").after(manager);
+  manager.insertAdjacentHTML("beforeend", `<div class="storage-profile-summary"><strong id="${provider}StorageProfileSummary">暂无配置</strong><small id="${provider}StorageProfileMeta"></small></div><button id="${provider}StorageProfileEdit" type="button" hidden>编辑</button><button id="${provider}StorageProfileSave" type="button" class="primary" hidden>保存并测试</button>`);
+  const editor = document.createElement("div"),
+    editorActions = document.createElement("div");
+  editor.className = "storage-profile-editor";
+  editor.hidden = true;
+  editorActions.className = "storage-profile-editor-actions";
+  manager.after(editor);
+  editor.append(manager.querySelector(":scope > label:not(.storage-profile-picker)"));
+  for (const element of [...card.querySelectorAll(":scope > label, :scope > .storage-provider-hint")])
+    editor.append(element);
+  editor.append(editorActions);
+  editorActions.append($(`#${provider}StorageProfileSave`));
+  fields.editor = editor;
+  for (const input of editor.querySelectorAll("input, select")) {
+    input.addEventListener("input", () => { fields.dirty = true; });
+    input.addEventListener("change", () => { fields.dirty = true; });
+  }
+}
+// Provider Prefix is part of the stored profile and is included in every upload target.
 
 function wrapStorageSection(element, title, description, className = "") {
   const details = document.createElement("details"),
@@ -99,6 +130,30 @@ const storageProviderDisclosure = wrapStorageSection(
   "管理 Cloudflare R2 与阿里云 OSS 的连接凭据",
   "storage-provider-disclosure",
 );
+const storageUnavailable = document.createElement("div");
+storageUnavailable.id = "storageUnavailable";
+storageUnavailable.className = "table-card storage-unavailable";
+storageUnavailable.textContent = "请先至少启用一个对象存储以开始";
+storageProviderDisclosure.after(storageUnavailable);
+const storageSummaryActions = document.createElement("span");
+storageSummaryActions.className = "storage-summary-actions";
+$("#storage .storage-settings").append(storageSummaryActions);
+for (const provider of Object.keys(storageProviderFields)) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.storageSummaryProvider = provider;
+  button.textContent = `${provider === "r2" ? "R2" : "OSS"} 新增`;
+  button.onclick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    storageProviderDisclosure.hidden = false;
+    storageProviderDisclosure.open = true;
+    if (storageProviderProfiles[provider].length)
+      $(storageProviderFields[provider].edit).click();
+    else $(storageProviderFields[provider].add).click();
+  };
+  storageSummaryActions.append(button);
+}
 // Its open state depends on server configuration. Exclude it from the first
 // paint so a configured form does not appear expanded before closing.
 storageProviderDisclosure.hidden = true;
@@ -203,6 +258,7 @@ $("#storageBrowserDelete").onclick = async function () {
   }
 };
 
+
 document.body.insertAdjacentHTML("beforeend", '<dialog id="storageDeleteDialog" class="storage-confirm-dialog"><form method="dialog"><div class="storage-confirm-icon" aria-hidden="true">!</div><div><span class="eyebrow">DELETE OBJECTS</span><h3>永久删除所选对象？</h3><p>这些对象将立即从 Bucket 中删除，且无法恢复。</p><div id="storageDeleteSummary" class="storage-delete-summary"></div></div><menu><button value="cancel">取消</button><button value="confirm" class="danger">永久删除</button></menu></form></dialog>');
 function confirmStorageObjectDelete(keys) {
   const dialog = $("#storageDeleteDialog"), summary = $("#storageDeleteSummary");
@@ -254,7 +310,7 @@ $("#r2Region").insertAdjacentHTML(
 );
 storageProviderDisclosure.insertAdjacentHTML(
   "afterend",
-  '<form id="existingStorageForm" class="table-card existing-storage"><div><span class="eyebrow">MANUAL SYNC</span><h3>按需同步到实例</h3><p>选择 Bucket 内的目录或文件，再复制或挂载到实例。</p></div><label>运行中的实例<select id="existingStorageInstance" required><option value="">正在加载…</option></select></label><label>存储源<select id="existingStorageProvider"><option value="r2">Cloudflare R2</option><option value="oss">阿里云 OSS</option></select></label><label>Bucket 内目录或文件<div class="storage-path-picker"><input id="existingStoragePrefix" readonly placeholder="整个 Bucket"><button id="existingStorageBrowse" type="button">浏览…</button></div></label><label>实例目标目录<input id="existingStorageTarget" value="/data/datasets"></label><label>操作<select id="existingStorageMode"><option value="copy">复制到本地磁盘</option><option value="mount">只读挂载</option></select><small id="existingStorageModeHelp" class="storage-mode-help"></small><span id="existingStorageAutoInstallRow" class="storage-auto-install" hidden><input id="existingStorageAutoInstall" type="checkbox" checked>缺少时自动安装挂载工具</span></label><button class="primary" type="submit">开始复制</button><small id="existingStorageHint">新实例不会自动读取 S3；请选择内容后再执行操作。</small></form>',
+  '<form id="existingStorageForm" class="table-card existing-storage"><div><span class="eyebrow">MANUAL SYNC</span><h3>按需同步到实例</h3><p>选择 Bucket 内的目录或文件，再复制或挂载到实例。</p></div><label>运行中的实例<select id="existingStorageInstance" required><option value="">正在加载…</option></select></label><label>存储源<select id="existingStorageProvider"><option value="r2">Cloudflare R2</option><option value="oss">阿里云 OSS</option></select></label><label>Bucket 内目录或文件<div class="storage-path-picker"><input id="existingStoragePrefix" readonly placeholder="整个 Bucket"><button id="existingStorageBrowse" type="button">浏览…</button></div></label><label>实例目标目录<input id="existingStorageTarget" value="/data/datasets"></label><label>操作<select id="existingStorageMode"><option value="copy">复制到本地磁盘</option><option value="mount">只读挂载</option></select><small id="existingStorageModeHelp" class="storage-mode-help"></small><span id="existingStorageAutoInstallRow" class="storage-auto-install"><input id="existingStorageAutoInstall" type="checkbox" checked disabled>自动安装必要依赖</span></label><button class="primary" type="submit">开始复制</button><small id="existingStorageHint">新实例不会自动读取 S3；请选择内容后再执行操作。</small></form>',
 );
 document.body.insertAdjacentHTML(
   "beforeend",
@@ -265,16 +321,19 @@ const existingStorageDisclosure = wrapStorageSection(
   "同步到实例",
   "选择 Bucket 文件夹并手动同步或挂载",
 );
-wrapStorageSection(
+const storageBrowserDisclosure = wrapStorageSection(
   $("#storageBrowser"),
   "浏览 Bucket",
   "查看目录、选择对象或删除文件",
 );
-wrapStorageSection(
+const storageUploadDisclosure = wrapStorageSection(
   $("#storageUploadCard"),
   "上传文件",
   "选择文件或文件夹，按需打包并上传",
 );
+existingStorageDisclosure.hidden = true;
+storageBrowserDisclosure.hidden = true;
+storageUploadDisclosure.hidden = true;
 let existingStorageInstances = new Map();
 let existingStorageProviderConfigs = {};
 const existingStorageDraftKey = "fast-gpu-existing-storage-v1";
@@ -298,7 +357,9 @@ function updateExistingStorageMode() {
   $("#existingStorageModeHelp").textContent = mount
     ? "不下载完整数据，使用时从 S3 读取；依赖网络，断开前需卸载。"
     : "下载一份到实例磁盘；完成后可离线使用，不会删除目标目录中的其他文件。";
-  $("#existingStorageAutoInstallRow").hidden = !mount;
+  $("#existingStorageAutoInstallRow").lastChild.textContent = mount
+    ? "自动安装 rclone 和挂载依赖"
+    : "自动安装 rclone";
   $("#existingStorageForm button[type='submit']").textContent = mount ? "开始挂载" : "开始复制";
 }
 async function loadExistingStorageInstances() {
@@ -385,32 +446,48 @@ $("#existingStorageForm").onsubmit = async function (event) {
     instance = existingStorageInstances.get(id);
   if (!instance) return toast("请选择一个运行中的实例");
   if (instance.status !== "running")
-    return toast("请先启动实例，再同步或挂载 S3 数据");
+    return toast("请确保实例正在运行且 SSH 正常工作");
   if (
     $("#existingStorageMode").value === "mount" &&
     $("#existingStoragePrefix").dataset.selectionType === "object"
   )
     return toast("只读挂载只支持 Bucket 或目录；单个文件请使用复制到本地磁盘");
   setButtonBusy(button, "正在同步…");
-  $("#existingStorageHint").textContent = "实例正在连接并同步 S3 数据，请勿关闭应用…";
+  $("#existingStorageHint").textContent = "正在检查依赖…";
   try {
-    const result = await request(`/api/instances/${encodeURIComponent(id)}/object-storage`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+    const url = `/api/instances/${encodeURIComponent(id)}/object-storage`,
+      payload = {
         instanceProvider: instance.provider,
         provider: $("#existingStorageProvider").value,
         prefix: $("#existingStoragePrefix").value,
         target: $("#existingStorageTarget").value,
         mode: $("#existingStorageMode").value,
         autoInstall: $("#existingStorageAutoInstall").checked,
+      },
+      options = (body) => ({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
       }),
+      check = await request(url, options({ ...payload, phase: "check" }));
+    if (!check.dependenciesReady) {
+      $("#existingStorageHint").textContent = "正在安装依赖…";
+      await request(url, options({ ...payload, phase: "prepare" }));
+    }
+    $("#existingStorageHint").textContent = "正在同步 S3 数据…";
+    const result = await request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
     });
     saveExistingStorageDraft();
-    $("#existingStorageHint").textContent = result.output || `已同步到 ${result.target}`;
+    // Do not expose verbose remote package-manager output in the form status.
+    $("#existingStorageHint").textContent = result.mode === "mount"
+      ? `S3 已挂载到 ${result.target}`
+      : `S3 数据已同步到 ${result.target}`;
     toast(result.mode === "mount" ? "对象存储已只读挂载" : "对象存储同步完成");
   } catch (error) {
-    $("#existingStorageHint").textContent = error.message;
+    $("#existingStorageHint").textContent = `${error.message}。请确保实例正在运行且 SSH 正常工作。`;
     toast("同步 S3 数据失败：" + error.message);
   } finally {
     clearButtonBusy(button);
@@ -509,6 +586,88 @@ function updateStorageUploadProviders(providers) {
     unavailable.hidden = false;
     form.hidden = true;
   }
+}
+function showStorageProfile(provider, profileId) {
+  const fields = storageProviderFields[provider],
+    profiles = storageProviderProfiles[provider],
+    profile = profiles.find((item) => item.id === profileId) || null;
+  $(fields.profile).value = profile?.id || "";
+  $(fields.name).value = profile?.name || `配置 ${profiles.length + 1}`;
+  $(fields.endpoint).value = profile?.endpoint || "";
+  $(fields.bucket).value = profile?.bucket || "";
+  $(fields.prefix).value = profile?.prefix || "";
+  $(fields.region).value = profile?.region || (provider === "r2" ? "auto" : "");
+  $(fields.accessKey).value = profile?.accessKeyId || "";
+  $(fields.secretKey).value = profile?.secretAccessKey || "";
+  $(fields.remove).disabled = !profile;
+  $(fields.remove).hidden = !profile;
+  fields.dirty = false;
+  const summary = $(fields.card.querySelector("#" + provider + "StorageProfileSummary") ? `#${provider}StorageProfileSummary` : "");
+  if (summary) summary.textContent = profile?.name || "暂无配置";
+  const meta = $(`#${provider}StorageProfileMeta`);
+  if (meta) meta.textContent = profile ? `${profile.bucket || "未填写 Bucket"}${profile.configured ? " · 已配置" : " · 配置不完整"}` : "请点击新增创建配置";
+  const edit = $(`#${provider}StorageProfileEdit`), save = $(`#${provider}StorageProfileSave`);
+  if (edit) edit.hidden = !profile;
+  if (save) save.hidden = !profileId;
+  $(fields.region).dispatchEvent(new Event("storage-profile-render"));
+}
+function setStorageEditorVisible(provider, visible) {
+  const fields = storageProviderFields[provider];
+  fields.card.classList.toggle("storage-profile-editing", visible);
+  fields.editor.hidden = !visible;
+  fields.card.querySelector(".storage-profile-picker").hidden = !storageProviderProfiles[provider].length;
+  $(`#${provider}StorageProfileEdit`).hidden = visible || !$(fields.profile).value;
+  $(`#${provider}StorageProfileSave`).hidden = !visible;
+}
+async function confirmStorageProfileDiscard(provider) {
+  const fields = storageProviderFields[provider];
+  if (!fields.dirty) return true;
+  return confirmAction("当前配置有未保存修改，确定放弃修改吗？");
+}
+function renderStorageProfiles(provider, activeProfileId = "") {
+  const fields = storageProviderFields[provider],
+    profiles = storageProviderProfiles[provider],
+    select = $(fields.profile);
+  fields.card.querySelector(".storage-profile-picker").hidden = !profiles.length;
+  select.innerHTML = profiles.length
+    ? profiles.map((profile) => `<option value="${esc(profile.id)}">${esc(profile.name)}</option>`).join("")
+    : '<option value="">尚无配置</option>';
+  const selectedId = activeProfileId || profiles[0]?.id || "";
+  select.dataset.previous = selectedId;
+  showStorageProfile(provider, selectedId);
+  setStorageEditorVisible(provider, false);
+}
+for (const [provider, fields] of Object.entries(storageProviderFields)) {
+  $(fields.profile).onchange = async () => {
+    if (!(await confirmStorageProfileDiscard(provider))) return renderStorageProfiles(provider, $(fields.profile).dataset.previous || "");
+    $(fields.profile).dataset.previous = $(fields.profile).value;
+    showStorageProfile(provider, $(fields.profile).value);
+    setStorageEditorVisible(provider, false);
+  };
+  $(fields.edit).onclick = async () => { if (await confirmStorageProfileDiscard(provider)) setStorageEditorVisible(provider, true); };
+  $(fields.add).onclick = () => {
+    if (fields.dirty) return void confirmStorageProfileDiscard(provider).then((ok) => {
+      if (ok) { fields.dirty = false; $(fields.add).click(); }
+    });
+    $(fields.profile).value = "";
+    showStorageProfile(provider, "");
+    $(fields.name).value = "";
+    setStorageEditorVisible(provider, true);
+    $(fields.name).focus();
+  };
+  $(fields.remove).onclick = async () => {
+    const profileId = $(fields.profile).value,
+      profile = storageProviderProfiles[provider].find((item) => item.id === profileId);
+    if (!profile) return;
+    if (!(await confirmAction(`确定删除对象存储配置“${profile.name}”吗？`))) return;
+    try {
+      await request(`/api/storage/providers/${provider}/profiles/${encodeURIComponent(profileId)}`, { method: "DELETE" });
+      await loadS3Config();
+      toast("对象存储配置已删除");
+    } catch (error) {
+      toast("删除失败：" + error.message);
+    }
+  };
 }
 let storageSelections = [],
   nextStorageSelectionId = 1,
@@ -624,9 +783,11 @@ function renderStorageSelections() {
       compressed = groupedBox || box.compress,
       uploadName = groupedBox ? (groupBoxes[0].uploadName || archiveName(groupBoxes)) : box.uploadName,
       destinationPrefix = groupBoxes[0].prefix || "",
-      bucket = existingStorageProviderConfigs[$("#storageUploadProvider").value]?.bucket || "Bucket",
-      destinationKey = [destinationPrefix, uploadName].filter(Boolean).join("/"),
-      destination = `${bucket} / ${destinationKey}`;
+      providerConfig = existingStorageProviderConfigs[$("#storageUploadProvider").value] || {},
+      configPrefix = String(providerConfig.prefix || "").replace(/^\/+|\/+$/g, ""),
+      bucket = providerConfig.bucket || "Bucket",
+      destinationKey = [configPrefix, destinationPrefix, uploadName].filter(Boolean).join("/"),
+      destination = `${bucket} / ${destinationKey}（配置 Prefix：${configPrefix || "根目录"}；上传 Prefix：${destinationPrefix || "根目录"}）`;
     return `<section class="storage-selection-box${box.marked ? " is-marked" : ""}"><header><label class="storage-box-selector"><input type="checkbox" data-storage-box-group="${box.id}" ${box.marked ? "checked" : ""}><span></span></label><div class="storage-box-title"><small>${box.kind === "folder" ? "文件夹" : "文件"}</small><strong title="${esc(box.name)}">${esc(box.name)}</strong></div><span class="storage-file-count">${selected}/${box.files.length}</span><button type="button" class="storage-box-remove" data-storage-remove-box="${box.id}" aria-label="移除 ${esc(box.name)}" title="移除">×</button></header><div class="storage-box-options"><label><span>上传为</span><input data-storage-box-name="${box.id}" value="${esc(uploadName || "")}" ${groupedBox && groupBoxes[0].id !== box.id ? "disabled" : ""}></label><label><span>Prefix</span><input data-storage-box-prefix="${box.id}" value="${esc(box.prefix || "")}" placeholder="留空则上传到根目录" ${groupedBox && groupBoxes[0].id !== box.id ? "disabled" : ""}></label><label class="storage-compress-toggle"><input type="checkbox" data-storage-box-compress="${box.id}" ${compressed ? "checked" : ""} ${groupedBox ? "disabled" : ""}><span><b>打包为 .tar.gz</b>${groupedBox ? "<small>合并组将共同打包</small>" : ""}</span></label></div><div class="storage-box-preview"><span>上传目标</span><code>${esc(destination)}</code></div><div class="storage-selection-files">${box.files.map((file, index) => { const locked = file.selected && selected === 1; return `<label class="storage-selection-file${file.selected ? " is-selected" : ""}${locked ? " is-required" : ""}"><span class="storage-tree-branch"></span><input type="checkbox" data-storage-file-box="${box.id}" data-storage-file-index="${index}" ${file.selected ? "checked" : ""} ${locked ? "disabled" : ""}><span class="storage-file-icon">${file.relativePath.includes("/") ? "└" : "·"}</span><span title="${esc(file.relativePath)}">${esc(file.relativePath)}</span><small>${formatObjectSize(file.size)}</small></label>`; }).join("")}</div></section>`;
   };
   target.innerHTML = [...grouped.entries()].map(([key, boxes]) => {
@@ -713,6 +874,7 @@ $("#storageUploadStart").onclick = async function () {
   }
 };
 async function loadS3Config() {
+  if (!storagePageReady) return;
   let c;
   try {
     c = await request("/api/storage/providers");
@@ -725,17 +887,19 @@ async function loadS3Config() {
   }
   // 实例列表加载失败不应阻塞存储设置页面（例如尚未配置任何算力供应商时）
   try {
-    await loadExistingStorageInstances();
+    void loadExistingStorageInstances().catch(() => {
+      $("#existingStorageInstance").innerHTML = '<option value="">请先启动实例</option>';
+    });
   } catch (_instanceError) {
     $("#existingStorageInstance").innerHTML = '<option value="">请先启动实例</option>';
   }
   existingStorageProviderConfigs = c.providers || {};
-  await loadStorageUploadQueue();
+  void loadStorageUploadQueue();
   for (const [provider, fields] of Object.entries(storageProviderFields)) {
     const item = c.providers?.[provider] || {};
+    storageProviderProfiles[provider] = item.profiles || [];
+    renderStorageProfiles(provider, item.activeProfileId);
     $(fields.enabled).checked = Boolean(item.enabled);
-    $(fields.endpoint).value = item.endpoint || "";
-    $(fields.bucket).value = item.bucket || "";
     if (
       item.region &&
       ![...$(fields.region).options].some(
@@ -746,9 +910,6 @@ async function loadS3Config() {
         new Option(`${item.region}（已保存）`, item.region),
       );
     }
-    $(fields.region).value = item.region || (provider === "r2" ? "auto" : "");
-   $(fields.accessKey).value = item.accessKeyId || "";
-   $(fields.secretKey).value = item.secretAccessKey || "";
   $(fields.accessKey).placeholder = "S3 Access Key ID";
     const verification = item.verification;
     $(fields.hint).textContent = item.configured
@@ -756,7 +917,12 @@ async function loadS3Config() {
         ? `已保存 Bucket：${item.bucket} · 联通${verification.connected ? "正常" : "失败"} · 上传${verification.upload ? "可用" : "不可用"} · 下载${verification.download ? "可用" : "不可用"}`
         : `已保存 Bucket：${item.bucket} · 尚未测试`
       : "尚未配置";
-    storageProviderConfigured[provider] = Boolean(item.configured);
+  storageProviderConfigured[provider] = Boolean(item.configured);
+    const summaryButton = storageSummaryActions.querySelector(`[data-storage-summary-provider="${provider}"]`);
+    if (summaryButton) {
+      summaryButton.textContent = `${provider === "r2" ? "R2" : "OSS"} ${item.profiles?.length ? "修改" : "新增"}`;
+      summaryButton.className = item.profiles?.length ? "has-profile" : "";
+    }
   }
   const draft = readExistingStorageDraft();
   if (draft.provider && existingStorageProviderConfigs[draft.provider]?.configured)
@@ -765,7 +931,7 @@ async function loadS3Config() {
   $("#existingStoragePrefix").dataset.selectionType = draft.selectionType || "prefix";
   $("#existingStorageTarget").value = draft.target || "/data/datasets";
   $("#existingStorageMode").value = draft.mode === "mount" ? "mount" : "copy";
-  $("#existingStorageAutoInstall").checked = draft.autoInstall !== false;
+  $("#existingStorageAutoInstall").checked = true;
   updateExistingStorageMode();
  updateStorageUploadProviders(c.providers || {});
  for (const [provider, item] of Object.entries(c.providers || {}))
@@ -794,6 +960,10 @@ async function loadS3Config() {
       );
   storageProviderDisclosure.open = configured.length === 0;
   storageProviderDisclosure.hidden = false;
+  storageUnavailable.hidden = enabled > 0;
+  existingStorageDisclosure.hidden = enabled === 0;
+  storageBrowserDisclosure.hidden = enabled === 0;
+  storageUploadDisclosure.hidden = enabled === 0;
   $("#s3Status").className = "pill " + (allVerified ? "ready" : "warning");
   $("#s3Status").textContent = configured.length
     ? configured
@@ -806,7 +976,7 @@ async function loadS3Config() {
   setPageTitleAlert(allVerified || !configured.length ? null : "存储权限异常");
   $("#s3Hint").textContent = enabled
     ? "凭据会安全保存；新实例不会自动同步，请在需要时手动选择内容。"
-    : "尚未配置任何对象存储供应商，下方可随时填写并保存。";
+    : "请至少启用并完整配置一个对象存储供应商。";
   for (const [provider, fields] of Object.entries(storageProviderFields))
     $(`#existingStorageProvider option[value="${provider}"]`).disabled = !$(fields.enabled).checked;
 }
@@ -941,6 +1111,7 @@ function createSearchableSelect(select) {
     true,
   );
   select.addEventListener("change", syncTrigger);
+  select.addEventListener("storage-profile-render", syncTrigger);
   new MutationObserver(syncTrigger).observe(select, {
     childList: true,
     subtree: true,
@@ -948,6 +1119,37 @@ function createSearchableSelect(select) {
   syncTrigger();
 }
 createSearchableSelect($("#ossRegion"));
+async function saveStorageProvider(provider) {
+  const fields = storageProviderFields[provider], button = $(fields.save), values = {
+    enabled: $(fields.enabled).checked,
+    profileId: $(fields.profile).value,
+      name: $(fields.name).value,
+      endpoint: $(fields.endpoint).value,
+      bucket: $(fields.bucket).value,
+      prefix: $(fields.prefix).value,
+    region: $(fields.region).value,
+    accessKeyId: $(fields.accessKey).value,
+    secretAccessKey: $(fields.secretKey).value,
+  };
+  setButtonBusy(button, "保存并测试中…");
+  try {
+    await request("/api/storage/providers", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ providers: { [provider]: values } }) });
+    fields.dirty = false;
+    await loadS3Config();
+    toast(`${provider.toUpperCase()} 配置已保存并完成测试`);
+  } catch (error) {
+    toast("保存失败：" + error.message);
+  } finally {
+    clearButtonBusy(button);
+  }
+}
+for (const [provider, fields] of Object.entries(storageProviderFields))
+  $(fields.save).onclick = () => saveStorageProvider(provider);
+storagePageReady = true;
+setTimeout(() => {
+  if ($("#storage")?.classList.contains("active")) loadS3Config();
+}, 0);
+globalThis.loadS3Config = loadS3Config;
 $("#s3Form").onsubmit = async function (event) {
   event.preventDefault();
   const button =
@@ -959,6 +1161,8 @@ $("#s3Form").onsubmit = async function (event) {
         provider,
         {
           enabled: $(fields.enabled).checked,
+          profileId: $(fields.profile).value,
+          name: $(fields.name).value,
           endpoint: $(fields.endpoint).value,
           bucket: $(fields.bucket).value,
           region: $(fields.region).value,
@@ -967,6 +1171,16 @@ $("#s3Form").onsubmit = async function (event) {
         },
       ]),
     );
+    const hasStoredOrEnteredProfile = Object.entries(providers).some(
+      ([provider, values]) =>
+        storageProviderProfiles[provider].length ||
+        values.endpoint.trim() ||
+        values.bucket.trim() ||
+        values.accessKeyId.trim() ||
+        values.secretAccessKey.trim(),
+    );
+    if (!hasStoredOrEnteredProfile)
+      throw new Error("空表单不能保存，请先填写一条完整配置");
     await request("/api/storage/providers", {
       method: "PUT",
       headers: { "content-type": "application/json" },

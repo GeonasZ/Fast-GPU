@@ -45,7 +45,12 @@ function updateProviderConnectionSummary(
   const disconnected = providerConfigStatus.filter((item) => !item.configured);
   const expired = providerConfigStatus.filter((item) => item.authIssue);
   const incomplete = providerConfigStatus.filter(
-    (item) => item.configured && !item.provisioningReady,
+    (item) =>
+      item.id === "hyperstack" &&
+      item.configured &&
+      item.missing?.some((requirement) =>
+        String(requirement).startsWith("HYPERSTACK_"),
+      ),
   );
   if (expired.length) {
     summary.className = "system disconnected";
@@ -564,12 +569,16 @@ async function loadHyperstackResources(saved = {}) {
           `<option value="${esc(x.name)}">${esc(x.name)} · ${esc(x.region || "未知区域")}</option>`,
       )
       .join("");
-    keypair.innerHTML = (data.keypairs || [])
-      .map(
+    const keypairs = data.keypairs || [];
+    keypair.innerHTML = keypairs.length
+      ? keypairs
+          .map(
         (x) =>
           `<option value="${esc(x.name)}" data-keypair-id="${esc(x.id)}" data-managed="${x.platformManaged ? "true" : ""}" data-policy-mode="${esc(x.registrationPolicy?.mode || "on-demand")}" data-policy-environments="${esc(JSON.stringify(x.registrationPolicy?.environments || []))}" data-environment="${esc(x.environmentName || "")}" data-region="${esc(x.region || "")}">${esc(x.name)}${x.environmentName ? " · " + esc(x.environmentName) : ""}${x.region ? " · " + esc(x.region) : " · 区域未知"}${x.platformManaged ? " · 平台管理" : ""}</option>`,
       )
-      .join("");
+          .join("")
+      : '<option value="">当前没有 SSH Keypair</option>';
+    keypair.disabled = !keypairs.length;
     image.innerHTML = (data.images || [])
       .map((x) => `<option value="${esc(x.name)}">${esc(x.name)}</option>`)
       .join("");
@@ -606,6 +615,7 @@ async function loadHyperstackResources(saved = {}) {
         );
         keypair.selectedIndex = availableIndex;
       }
+      renderHyperstackKeypairPicker();
       renderHyperstackKeypairRegistration(data.environments || []);
     };
     environment.onchange = filterKeypairs;
@@ -615,17 +625,17 @@ async function loadHyperstackResources(saved = {}) {
       $("#hyperstackImageUser").value = inferHyperstackImageUser();
     };
     filterKeypairs();
-    status.textContent = `已读取 ${data.environments?.length || 0} 个 Environment、${data.keypairs?.length || 0} 个 Keypair、${data.images?.length || 0} 个镜像`;
+    status.textContent = keypairs.length
+      ? `已读取 ${data.environments?.length || 0} 个 Environment、${keypairs.length} 个 Keypair、${data.images?.length || 0} 个镜像`
+      : "尚无 SSH Keypair，请先由平台创建一个";
   } catch (error) {
     status.textContent = "资源读取失败：" + error.message;
     toast(status.textContent);
   } finally {
-    for (const id of [
-      "hyperstackEnvironment",
-      "hyperstackKeypair",
-      "hyperstackImage",
-    ])
-      $("#" + id).disabled = false;
+    $("#hyperstackEnvironment").disabled = false;
+    $("#hyperstackImage").disabled = false;
+    $("#hyperstackKeypair").disabled = !$("#hyperstackKeypair")
+      .selectedOptions[0]?.dataset.keypairId;
   }
 }
 $("#refreshHyperstackResources").onclick = () =>
@@ -652,6 +662,21 @@ if (!$("#createHyperstackKeypair")) {
   ownershipNotice.setAttribute("role", "status");
   ownershipNotice.hidden = true;
   keypairSelect.after(ownershipNotice);
+  const picker = document.createElement("div");
+  picker.id = "hyperstackKeypairPicker";
+  picker.className = "entity-picker";
+  picker.innerHTML =
+    '<button type="button" class="entity-picker-trigger" aria-haspopup="listbox" aria-expanded="false"><span>选择 SSH Keypair</span><i aria-hidden="true">⌄</i></button><div class="entity-picker-popup" role="listbox" hidden></div>';
+  keypairSelect.classList.add("entity-picker-native");
+  keypairSelect.after(picker);
+  const emptyState = document.createElement("div");
+  emptyState.id = "hyperstackKeypairEmpty";
+  emptyState.className = "hyperstack-keypair-empty";
+  emptyState.hidden = true;
+  emptyState.innerHTML =
+    '<span aria-hidden="true">⌁</span><div><strong>还没有 SSH Keypair</strong><small>创建后平台会加密保存私钥，用于安全连接新建的 VM。</small></div><button type="button">创建 Keypair</button>';
+  emptyState.querySelector("button").onclick = () => button.click();
+  ownershipNotice.after(emptyState);
   const registration = document.createElement("fieldset");
   registration.id = "hyperstackKeypairRegistration";
   registration.className = "hyperstack-keypair-registration";
@@ -659,21 +684,124 @@ if (!$("#createHyperstackKeypair")) {
     '<legend>Keypair 区域注册</legend><label><input type="radio" name="hyperstackKeypairRegistrationMode" value="on-demand" checked> 按需自动注册 <small>推荐</small></label><label><input type="radio" name="hyperstackKeypairRegistrationMode" value="selected"> 注册到指定 Environment</label><div id="hyperstackKeypairEnvironmentChoices"></div><div class="hyperstack-keypair-registration-actions"><small id="hyperstackKeypairRegistrationStatus"></small><button id="saveHyperstackKeypairRegistration" type="button">保存注册策略</button></div>';
   keypairLabel.after(registration);
 }
+function renderHyperstackKeypairPicker() {
+  const select = $("#hyperstackKeypair"),
+    picker = $("#hyperstackKeypairPicker"),
+    trigger = picker?.querySelector(".entity-picker-trigger"),
+    popup = picker?.querySelector(".entity-picker-popup");
+  if (!picker || !trigger || !popup) return;
+  const options = [...select.options].filter(
+      (option) => option.dataset.keypairId && !option.hidden,
+    ),
+    selected = select.selectedOptions[0],
+    selectedManaged = selected?.dataset.managed === "true";
+  trigger.disabled = !options.length;
+  trigger.classList.toggle(
+    "unmanaged",
+    Boolean(selected?.dataset.keypairId) && !selectedManaged,
+  );
+  trigger.querySelector("span").textContent = selected?.dataset.keypairId
+    ? `${selected.textContent}${selectedManaged ? "" : " · 非平台管理"}`
+    : "当前 Environment 没有 SSH Keypair";
+  popup.innerHTML = options
+    .map(
+      (option) =>
+        `<div class="entity-picker-item ${option.selected ? "selected" : ""} ${option.dataset.managed === "true" ? "" : "unmanaged"}" role="option" aria-selected="${option.selected}"><button type="button" data-select-keypair="${esc(option.dataset.keypairId)}"><strong>${esc(option.value)}</strong><small>${esc(option.dataset.environment || "")}${option.dataset.region ? " · " + esc(option.dataset.region) : ""}${option.dataset.managed === "true" ? " · 平台管理" : " · 非平台管理 · 不可创建 VM"}</small></button><button type="button" class="entity-picker-delete" data-delete-keypair="${esc(option.dataset.keypairId)}" aria-label="删除 ${esc(option.value)}" title="删除 Keypair">×</button></div>`,
+    )
+    .join("");
+  trigger.onclick = () => {
+    const opening = popup.hidden;
+    popup.hidden = !opening;
+    trigger.setAttribute("aria-expanded", String(opening));
+  };
+  popup.querySelectorAll("[data-select-keypair]").forEach((button) => {
+    button.onclick = () => {
+      const option = [...select.options].find(
+        (item) => item.dataset.keypairId === button.dataset.selectKeypair,
+      );
+      if (option) option.selected = true;
+      popup.hidden = true;
+      trigger.setAttribute("aria-expanded", "false");
+      select.dispatchEvent(new Event("change"));
+      renderHyperstackKeypairPicker();
+    };
+  });
+  popup.querySelectorAll("[data-delete-keypair]").forEach((button) => {
+    button.onclick = async (event) => {
+      event.stopPropagation();
+      const option = [...select.options].find(
+        (item) => item.dataset.keypairId === button.dataset.deleteKeypair,
+      );
+      if (
+        !option ||
+        !(await confirmAction(
+          `确定删除 SSH Keypair “${option.value}”？Hyperstack 中的公钥和平台保存的私钥都会被删除。`,
+          { title: "删除 SSH Keypair", confirmText: "删除" },
+        ))
+      )
+        return;
+      button.disabled = true;
+      try {
+        await request(
+          `/api/providers/hyperstack/keypairs/${encodeURIComponent(button.dataset.deleteKeypair)}`,
+          { method: "DELETE" },
+        );
+        await loadProviderConfig();
+        await loadHyperstackResources(
+          providerConfigStatus.find((item) => item.id === "hyperstack")
+            ?.hyperstackConfig || {},
+        );
+        toast("SSH Keypair 已删除");
+      } catch (error) {
+        button.disabled = false;
+        toast("Keypair 删除失败：" + error.message);
+      }
+    };
+  });
+}
+document.addEventListener("click", (event) => {
+  const picker = $("#hyperstackKeypairPicker"),
+    popup = picker?.querySelector(".entity-picker-popup"),
+    trigger = picker?.querySelector(".entity-picker-trigger");
+  if (picker && popup && !picker.contains(event.target)) {
+    popup.hidden = true;
+    trigger?.setAttribute("aria-expanded", "false");
+  }
+});
 function renderHyperstackKeypairRegistration(environments) {
   const panel = $("#hyperstackKeypairRegistration"),
     option = $("#hyperstackKeypair").selectedOptions[0],
     choices = $("#hyperstackKeypairEnvironmentChoices"),
     status = $("#hyperstackKeypairRegistrationStatus"),
     button = $("#saveHyperstackKeypairRegistration"),
-    ownershipNotice = $("#hyperstackKeypairOwnershipNotice");
-  if (!panel || !option) return;
+    ownershipNotice = $("#hyperstackKeypairOwnershipNotice"),
+    emptyState = $("#hyperstackKeypairEmpty"),
+    createButton = $("#createHyperstackKeypair"),
+    hasKeypair = Boolean(option?.dataset.keypairId);
+  if (!panel) return;
+  panel.hidden = !hasKeypair;
+  if (emptyState) emptyState.hidden = hasKeypair;
+  createButton?.classList.toggle("empty-primary", !hasKeypair);
+  if (!hasKeypair) {
+    if (ownershipNotice) ownershipNotice.hidden = true;
+    return;
+  }
   const managed = option.dataset.managed === "true",
     mode = option.dataset.policyMode || "on-demand";
   if (ownershipNotice) {
     ownershipNotice.hidden = managed;
     ownershipNotice.textContent = managed
       ? ""
-      : "平台不拥有此 Keypair 的私钥，无法自动连接 VM 或跨区域注册。Keypair 信息仍实时读取自 Hyperstack。";
+      : "非平台管理：平台没有此 Keypair 的私钥，不能用它在平台创建或管理 VM，也不能跨区域注册。请改选或创建一个“平台管理”的 Keypair。";
+  }
+  const configSubmit = $("#hyperstackConfigForm").querySelector(
+    'button[type="submit"]',
+  );
+  if (configSubmit) {
+    configSubmit.disabled = !managed;
+    configSubmit.title = managed
+      ? ""
+      : "非平台管理的 SSH Keypair 不能用于平台创建 VM";
   }
   panel.disabled = !managed;
   panel.classList.toggle("unavailable", !managed);
@@ -778,7 +906,12 @@ $("#createHyperstackKeypair").onclick = async () => {
 };
 $("#hyperstackConfigForm").onsubmit = async (event) => {
   event.preventDefault();
-  const button = event.currentTarget.querySelector('button[type="submit"]');
+  const button = event.currentTarget.querySelector('button[type="submit"]'),
+    keypairOption = $("#hyperstackKeypair").selectedOptions[0];
+  if (keypairOption?.dataset.managed !== "true")
+    return toast(
+      "当前 SSH Keypair 不是平台管理，不能用于平台创建 VM；请改选或创建平台管理的 Keypair",
+    );
   button.disabled = true;
   try {
     await request("/api/providers/hyperstack/config", {
@@ -1015,17 +1148,27 @@ $("#refresh").onclick = async () => {
   await loadOffers(true);
   toast("报价与地区库存已刷新");
 };
-function updateImageVersionHint() {
-  const profile = imageProfiles.find(item => item.id === $("#imageVersion").value);
-  $("#customImageWrap").hidden = true;
-  $("#customCudaWrap").hidden = true;
-  $("#imageBuildModeWrap").style.display = "none";
-  $("#cudaFallbackWrap").style.display =
-    selected?.provider === "hyperstack" && profile?.cudaMajor === 13 ? "block" : "none";
+if(!$("#dockerProfile")){
+  const providerImageWrap=$("#imageVersion").closest("label"),behaviorPanel=document.createElement("section"),dockerWrap=document.createElement("label"),vmWrap=document.createElement("label");
+  providerImageWrap.id="providerImageWrap";
+  providerImageWrap.firstChild.nodeValue="厂商镜像";
+  behaviorPanel.className="boot-behavior-panel";
+  behaviorPanel.innerHTML='<div class="boot-behavior-head"><span aria-hidden="true">↻</span><div><strong>开机行为</strong><small>选择实例启动后自动执行的配置</small></div></div><div class="boot-behavior-fields"></div>';
+  dockerWrap.id="dockerProfileWrap";
+  dockerWrap.innerHTML='Docker 开机行为<select id="dockerProfile"></select><small id="dockerProfileHint">配置在开机行为页维护。</small>';
+  vmWrap.id="vmProfileWrap";vmWrap.hidden=true;
+  vmWrap.innerHTML='VM 开机行为<select id="vmProfile"></select><small id="vmProfileHint">宿主机脚本仅用于 VM。</small>';
+  behaviorPanel.querySelector(".boot-behavior-fields").append(dockerWrap,vmWrap);
+  providerImageWrap.after(behaviorPanel);
 }
+function behaviorHint(type){
+  const select=$(type==="vm"?"#vmProfile":"#dockerProfile"),hint=$(type==="vm"?"#vmProfileHint":"#dockerProfileHint"),profile=imageProfiles.find(item=>item.id===select.value);
+  hint.textContent=profile?.localFileExists===false?`本地启动脚本不存在：${profile.startupScriptPath}`:profile?`${type==="docker"?(profile.image||"供应商默认镜像"):"VM 宿主机"} · SSH 系统必装 · 启动脚本配置`:"请先选择开机行为";
+  hint.classList.toggle("local-file-hint",profile?.localFileExists===false);
+  if(type==="docker")$("#cudaFallbackWrap").style.display=selected?.provider==="hyperstack"&&profile?.cudaMajor===13?"block":"none";
+}
+function profileOptions(type){return imageProfiles.filter(profile=>profile.profileType===type).map(profile=>`<option value="${esc(profile.id)}" ${profile.recommended&&profile.localFileExists!==false?"selected":""} ${profile.localFileExists===false?"disabled":""}>${esc(profile.name)}${profile.localFileExists===false?"（本地脚本不存在）":""}</option>`).join("");}
 async function showLaunch() {
-  $("#customImageWrap").hidden = true;
-  $("#customCudaWrap").hidden = true;
   $("#selectedOffer").innerHTML =
     `<div class="offer-summary"><strong>${selected.gpuCount || 1}× ${esc(selected.gpu)}</strong><div class="sub">${esc(selected.providerName)} · ${esc(selected.region || "自动调度")}${selected.vram ? " · " + selected.vram + " GB 显存" : ""}</div></div>`;
   $("#dialogPrice").textContent = formatPrice(
@@ -1041,18 +1184,28 @@ async function showLaunch() {
   $("#cudaFallbackWrap").style.display =
     selected.provider === "hyperstack" ? "block" : "none";
   $("#allowCuda128Fallback").checked = false;
-  const imageSelect = $("#imageVersion"),
-    modeSelect = $("#imageBuildMode");
-  imageSelect.disabled = true;
-  modeSelect.disabled = true;
-  $("#imageBuildModeWrap").style.display = "none";
-  imageSelect.innerHTML = "<option>正在加载镜像…</option>";
-  $("#imageVersionHint").textContent =
-    selected.provider === "autodl"
-      ? "可选择账号镜像（含已共享到账号的社区镜像）或官方基础镜像。"
-      : "正在读取镜像构建方式…";
+  const imageSelect=$("#imageVersion"),dockerSelect=$("#dockerProfile"),vmSelect=$("#vmProfile");
+  $("#providerImageWrap").hidden=selected.provider!=="autodl";
+  $("#dockerProfileWrap").hidden=selected.provider==="hyperstack";
+  $("#vmProfileWrap").hidden=selected.provider!=="hyperstack";
+  imageSelect.disabled=dockerSelect.disabled=vmSelect.disabled=true;
+  dockerSelect.innerHTML="<option>正在加载 Docker 配置…</option>";
+  vmSelect.innerHTML="<option>正在加载 VM 配置…</option>";
+  if (selected.provider === "autodl") {
+    $("#imageVersionHint").textContent =
+      "可选择账号镜像（含已共享到账号的社区镜像）或官方基础镜像。";
+  }
   $("#launchDialog").showModal();
   try {
+    ({profiles:imageProfiles}=await request("/api/image-profiles"));
+    dockerSelect.innerHTML=profileOptions("docker");
+    vmSelect.innerHTML=profileOptions("vm");
+    if(!dockerSelect.options.length)throw Error("没有可用的 Docker 开机行为");
+    if(selected.provider==="hyperstack"&&!vmSelect.options.length)throw Error("没有可用的 VM 开机行为");
+    dockerSelect.onchange=()=>behaviorHint("docker");
+    vmSelect.onchange=()=>behaviorHint("vm");
+    behaviorHint("docker");
+    if(selected.provider==="hyperstack")behaviorHint("vm");
     if (selected.provider === "autodl") {
       const discovery = await request("/api/providers/autodl/discovery"),
         account = discovery.accountImages || [],
@@ -1074,20 +1227,12 @@ async function showLaunch() {
           : "");
       if (!account.length && !official.length)
         throw Error("AutoDL 没有返回可用镜像");
-    } else {
-      ({ profiles: imageProfiles } = await request("/api/image-profiles"));
-      imageSelect.innerHTML = imageProfiles
-        .map(
-          (profile) =>
-            `<option value="${esc(profile.id)}" ${profile.recommended ? "selected" : ""}>${esc(profile.name)}</option>`,
-        )
-        .join("");
-      imageSelect.onchange = updateImageVersionHint;
-      updateImageVersionHint();
     }
-    imageSelect.disabled = false;
+    imageSelect.disabled=selected.provider!=="autodl";
+    dockerSelect.disabled=false;
+    vmSelect.disabled=selected.provider!=="hyperstack";
   } catch (error) {
-    imageSelect.innerHTML = '<option value="">镜像加载失败</option>';
+    dockerSelect.innerHTML='<option value="">配置加载失败</option>';
     toast(error.message);
   }
 }
@@ -1095,12 +1240,15 @@ function openLaunch(id) {
   selected = offers.find((o) => o.id === id);
   showLaunch();
 }
-$("#confirmLaunch").onclick = async (e) => {
+  $("#confirmLaunch").onclick = async (e) => {
   e.preventDefault();
   const button = $("#confirmLaunch"),
     old = button.textContent;
-  if ($("#imageVersion").disabled || !$("#imageVersion").value)
-    return toast("请先选择可用镜像版本");
+    if(selected.provider==="autodl"&&(!$("#imageVersion").value||$("#imageVersion").disabled))return toast("请先选择可用的厂商镜像");
+    if(selected.provider!=="hyperstack"&&(!$("#dockerProfile").value||$("#dockerProfile").disabled))return toast("请先选择 Docker 开机行为");
+    if(selected.provider==="hyperstack"&&(!$("#vmProfile").value||$("#vmProfile").disabled))return toast("请先选择 VM 开机行为");
+    const launchProfile=imageProfiles.find(profile=>profile.id===$("#dockerProfile").value),vmLaunchProfile=imageProfiles.find(profile=>profile.id===$("#vmProfile").value);
+    if(selected.provider!=="hyperstack"&&launchProfile?.localFileExists===false||selected.provider==="hyperstack"&&vmLaunchProfile?.localFileExists===false)return toast("本地启动脚本不存在，请到开机行为页重新选择文件");
   button.disabled = true;
   button.textContent = "正在提交…";
   try {
@@ -1121,20 +1269,10 @@ $("#confirmLaunch").onclick = async (e) => {
         priceSource: selected.priceSource || selected.source,
         imageVersion:
           selected.provider === "autodl" ? undefined : $("#imageVersion").value,
-        imageProfileId:
-          selected.provider === "autodl" ? undefined : $("#imageVersion").value,
-        imageBuildMode:
-          selected.provider === "autodl"
-            ? undefined
-            : $("#imageBuildMode").value,
-        customImageUrl:
-          $("#imageVersion").value === "custom"
-            ? $("#customImageUrl").value.trim()
-            : undefined,
-        customCudaMajor:
-          $("#imageVersion").value === "custom"
-            ? Number($("#customCudaMajor").value)
-            : undefined,
+            imageProfileId:
+              selected.provider === "hyperstack" ? undefined : $("#dockerProfile").value,
+        vmProfileId:
+          selected.provider === "hyperstack" ? $("#vmProfile").value : undefined,
         imageUuid:
           selected.provider === "autodl" ? $("#imageVersion").value : undefined,
         cudaMin:
@@ -1152,7 +1290,14 @@ $("#confirmLaunch").onclick = async (e) => {
     await loadInstances();
     go("instances");
   } catch (error) {
-    if (error.code === "autodl_no_compatible_host") {
+    if (["local_startup_script_missing","local_startup_script_invalid","local_startup_script_too_large"].includes(error.code)) {
+      const profile=imageProfiles.find(item=>item.id===$("#dockerProfile").value)||imageProfiles.find(item=>item.id===$("#vmProfile").value);
+      if(profile)profile.localFileExists=false;
+      const affected=profile?.profileType==="vm"?$("#vmProfile"):$("#dockerProfile");
+      affected.selectedOptions[0]?.setAttribute("disabled","");
+      behaviorHint(profile?.profileType||"docker");
+      toast(error.message);
+    } else if (error.code === "autodl_no_compatible_host") {
       if (selected) {
         selected.available = false;
         selected.deployable = false;

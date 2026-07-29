@@ -42,3 +42,29 @@ test("instance cards have one status derivation and no legacy status writer", ()
   );
   assert.doesNotMatch(sshTransfer, /applyInstanceLifecycleLabels/);
 });
+
+test("provider inventory cleanup never treats durable keypairs as instances", () => {
+  const server = require("node:fs").readFileSync(
+    path.join(__dirname, "..", "server.js"),
+    "utf8",
+  );
+  assert.match(server, /id\.startsWith\("keypair:"\)/);
+});
+
+test("Hyperstack keypair picker exposes per-entity delete controls", () => {
+  assert.match(source, /data-delete-keypair/);
+  assert.match(source, /method:\s*"DELETE"/);
+});
+
+test("unmanaged Hyperstack keypairs are visibly blocked from VM configuration", () => {
+  assert.match(source, /非平台管理 · 不可创建 VM/);
+  assert.match(source, /configSubmit\.disabled = !managed/);
+  assert.match(source, /keypairOption\?\.dataset\.managed !== "true"/);
+});
+
+test("shared provisioning checks are not reported as every provider being incomplete", () => {
+  assert.match(
+    source,
+    /item\.id === "hyperstack"[\s\S]*startsWith\("HYPERSTACK_"\)/,
+  );
+});
