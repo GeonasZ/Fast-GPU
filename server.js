@@ -7,6 +7,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const pty = require("node-pty");
 const {
   randomBytes,
+  randomInt,
   createPrivateKey,
   createPublicKey,
   publicEncrypt,
@@ -1877,7 +1878,7 @@ async function provisionHyperstackViaSsh(id, options, credential) {
         FLEET_AGENT_SECRET: credential.secret,
         FLEET_PROVIDER: "hyperstack",
         FLEET_INSTANCE_NAME: options.name || "fast-gpu",
-        FLEET_SSH_PORT: "22",
+        FLEET_SSH_PORT: String(options.sshPort || managed.port),
         FLEET_SSH_PUBLIC_KEY: managed.publicKey,
         FLEET_SSH_USER: managed.username,
         FLEET_ALLOW_CUDA128_FALLBACK: options.allowCuda128Fallback ? "1" : "0",
@@ -4574,6 +4575,7 @@ async function api(req, res, url) {
       d.vmProfileId=vmProfile.id;
       d.imageUrl=vmProfile.image||resolveCuda13Image(process.env);
       d.expectedCudaMajor=vmProfile.cudaMajor;
+      d.sshPort=randomInt(20000,60000);
     }
     const hyperstackDeployment =
         d.provider === "hyperstack" ? await prepareHyperstackCreate(d) : null,
@@ -4638,7 +4640,7 @@ async function api(req, res, url) {
         provider: d.provider,
         privateKey: instanceCredential.privateKey,
         publicKey: instanceCredential.publicKey,
-        internalPort: d.provider === "hyperstack" ? 22 : sshStore.port,
+        internalPort: d.provider === "hyperstack" ? item.sshPort : sshStore.port,
         username: item.sshUser || "root",
       });
     instanceLaunchProfiles.set(`${d.provider}:${item.id}`, {
