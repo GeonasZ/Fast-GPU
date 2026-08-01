@@ -1,0 +1,18 @@
+{
+  "id": "runpod",
+  "order": 40,
+  "kind": "cloud_compute",
+  "credentialEnv": "RUNPOD_API_KEY",
+  "currency": "美元",
+  "title": "RunPod",
+  "description": "全球 GPU Pod",
+  "launch": {"profileType":"docker","managedSsh":true},
+  "instanceAccess": {"level":"key","label":"需要额外 SSH 凭据","description":"网页创建的实例可同步，但 API 不提供原有 SSH 私钥或密码；需要输入可用凭据，或进入实例手动安装平台公钥。"},
+  "portals": [
+    {"id":"billing","label":"打开充值页面","url":"https://www.runpod.io/console/user/billing"},
+    {"id":"key","label":"获取 API Key","url":"https://www.runpod.io/console/user/settings"}
+  ],
+  "fields": [
+    {"id":"apiKey","storageKey":"runpod","label":"API Key","control":"password","masked":true,"required":true,"placeholder":"粘贴 RunPod API Key","portal":{"label":"获取 Key","url":"https://www.runpod.io/console/user/settings"}}
+  ]
+}

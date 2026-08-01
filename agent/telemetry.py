@@ -85,7 +85,7 @@ def collect():
     return telemetry
 
 def push():
-    payload = json.dumps({"agentId": os.environ["FLEET_AGENT_ID"], "provider": os.environ.get("FLEET_PROVIDER", "ppio"), "instanceName": os.environ["FLEET_INSTANCE_NAME"], "telemetry": collect()}).encode()
+    payload = json.dumps({"agentId": os.environ["FLEET_AGENT_ID"], "provider": os.environ.get("FLEET_PROVIDER", "unknown"), "instanceName": os.environ["FLEET_INSTANCE_NAME"], "telemetry": collect()}).encode()
     request = urllib.request.Request(os.environ["FLEET_TELEMETRY_PUSH_URL"], data=payload, method="POST", headers={"Content-Type": "application/json", "X-Fleet-Agent-Id": os.environ["FLEET_AGENT_ID"], "Authorization": "Bearer " + os.environ["FLEET_AGENT_SECRET"]})
     with urllib.request.urlopen(request, timeout=15) as response:
         if response.status < 200 or response.status >= 300:

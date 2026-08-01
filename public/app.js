@@ -25,28 +25,10 @@ globalThis.confirmAction = (message, options = {}) =>
     dialog.onclose = () => resolve(dialog.returnValue === "confirm");
     dialog.showModal();
   });
-const hyperstackCidrDefaultTimer = setInterval(() => {
-  const input = $("#hyperstackAgentCidr"),
-    form = $("#hyperstackConfigForm"),
-    status = $("#hyperstackConfigStatus");
-  if (
-    !input ||
-    form?.hidden ||
-    status?.textContent === "正在从 Hyperstack 读取资源…"
-  )
-    return;
-  if (!input.value) input.value = "0.0.0.0/0";
-  input.placeholder = "0.0.0.0/0 允许从任意 IPv4 地址连接";
-  if (input.parentElement?.firstChild)
-    input.parentElement.firstChild.nodeValue = "SSH 来源 CIDR";
-  clearInterval(hyperstackCidrDefaultTimer);
-}, 250);
 let offers = [],
   selected = null,
   instances = [],
-  streams = new Map(),
-  regionalSelections = new Map(),
-  instancePricingOffers = [];
+  streams = new Map();
 const telemetryCache = new Map(),
   reachabilityCache = new Map(),
   expandedInstances = new Set(),
@@ -461,11 +443,7 @@ function restoreUiState() {
 function formatPrice(item, fallback = "创建前确认") {
   if (!Number.isFinite(item?.price) || item.price <= 0) return fallback;
   const [currency = "CNY", period = "hour"] = String(
-    item.priceUnit ||
-      { ppio: "CNY/hour", hyperstack: "USD/hour", runpod: "USD/hour" }[
-        item.provider
-      ] ||
-      "CNY/hour",
+    item.priceUnit || "CNY/hour",
   ).split("/");
   const periodLabel = { hour: "小时", month: "月" }[period] || period;
   return `${currency} ${item.price.toFixed(2)} / ${periodLabel}`;

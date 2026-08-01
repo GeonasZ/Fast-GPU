@@ -1,0 +1,1 @@
+{"directory":"vm_default","id":"preset-vm-default","name":"VM 默认开机行为","profileType":"vm","image":"","cudaMajor":13,"kind":"vm","recommended":true,"defaultRole":"vm","refreshWhenScriptShorterThan":300}

@@ -1,62 +1,141 @@
-const storageProviderFields = {
-  r2: {
-    enabled: "#r2Enabled",
-    endpoint: "#r2Endpoint",
-    bucket: "#r2Bucket",
-    prefix: "#r2Prefix",
-    region: "#r2Region",
-    accessKey: "#r2AccessKey",
-    secretKey: "#r2SecretKey",
-    hint: "#r2Hint",
-  },
-  oss: {
-    enabled: "#ossEnabled",
-    endpoint: "#ossEndpoint",
-    bucket: "#ossBucket",
-    prefix: "#ossPrefix",
-    region: "#ossRegion",
-    accessKey: "#ossAccessKey",
-    secretKey: "#ossSecretKey",
-    hint: "#ossHint",
-  },
-};
+const storageProviderFields = Object.fromEntries(
+  [...document.querySelectorAll("[data-storage-provider]")].map((card) => {
+    const provider = card.dataset.storageProvider;
+    const fields = Object.fromEntries(
+      [...card.querySelectorAll("[data-storage-field]")].map((input) => [
+        input.dataset.storageField,
+        `#${input.id}`,
+      ]),
+    );
+    const hint = card.querySelector("[data-storage-provider-hint]");
+    hint.id = `storage-${provider}-hint`;
+    fields.accessKey = fields.accessKeyId;
+    fields.secretKey = fields.secretAccessKey;
+    fields.hint = `#${hint.id}`;
+    return [provider, fields];
+  }),
+);
 const storageProviderConfigured = Object.fromEntries(
   Object.keys(storageProviderFields).map((provider) => [provider, false]),
 );
 const storageProviderProfiles = Object.fromEntries(
   Object.keys(storageProviderFields).map((provider) => [provider, []]),
 );
-var storagePageReady = false;
-for (const field of [
-  {
-    ids: ["#r2Bucket", "#ossBucket"],
-    label: "Bucket Name",
-    placeholder: "请输入 Bucket Name",
-    description: "对象存储 Bucket Name",
-  },
-  {
-    ids: ["#r2AccessKey", "#ossAccessKey"],
-    label: "S3 Access Key ID",
-    placeholder: "请输入 S3 Access Key ID",
-    description: "在供应商控制台创建的 S3 Access Key ID（不是云账号或登录邮箱）",
-  },
-  {
-    ids: ["#r2SecretKey", "#ossSecretKey"],
-    label: "S3 Secret Access Key",
-    placeholder: "请输入 S3 Secret Access Key",
-    description: "在供应商控制台创建的 S3 Secret Access Key（不是云账号登录密码）",
-  },
-])
-  for (const id of field.ids) {
-    const input = $(id),
-    labelText = [...input.closest("label").childNodes].find(
-      (node) => node.nodeType === Node.TEXT_NODE,
-    );
-    if (labelText) labelText.textContent = field.label;
-    input.placeholder = field.placeholder;
-    input.setAttribute("aria-label", field.description);
-  }
+const storageFieldSelectorNames = {
+  enabled: "enabled",
+  endpoint: "endpoint",
+  bucket: "bucket",
+  prefix: "prefix",
+  region: "region",
+  accessKeyId: "accessKey",
+  secretAccessKey: "secretKey",
+};
+let storageDefinitionsLoaded = false;
+const storageProviderTitles = new Map();
+const storageProviderDefinitions = new Map();
 
+async function loadStorageProviderDefinitions() {
+  if (storageDefinitionsLoaded) return;
+  const schemaDocument = await request("/api/provider-config");
+  for (const definition of schemaDocument.s3 || []) {
+    const selectors = storageProviderFields[definition.id];
+    if (!selectors) continue;
+    storageProviderTitles.set(definition.id, definition.title);
+    storageProviderDefinitions.set(definition.id, definition);
+    const card = document.querySelector(
+      `[data-storage-provider="${definition.id}"]`,
+    );
+    const title = card?.querySelector(".s3-legend strong, legend strong");
+    const description = card?.querySelector(".s3-legend small, legend small");
+    if (title) title.textContent = definition.title;
+    if (description) description.textContent = definition.description || "";
+    for (const field of definition.fields || []) {
+      const selectorName = storageFieldSelectorNames[field.id];
+      const input = selectorName ? $(selectors[selectorName]) : null;
+      if (!input) continue;
+      const label = input.closest("label");
+      const labelText = label
+        ? [...label.childNodes].find((node) => node.nodeType === Node.TEXT_NODE)
+        : null;
+      if (labelText) labelText.textContent = field.label;
+      if (field.placeholder) input.placeholder = field.placeholder;
+      if (field.control === "password") input.type = "password";
+      if (field.readOnly) {
+        input.disabled = true;
+        input.classList.add("fixed-storage-value");
+      }
+      if (field.hint && !input.nextElementSibling?.matches(".fixed-storage-hint")) {
+        const hint = document.createElement("small");
+        hint.className = "fixed-storage-hint";
+        hint.textContent = field.hint;
+        input.after(hint);
+      }
+      if (field.default !== undefined && !input.value) {
+        if (field.control === "checkbox") input.checked = Boolean(field.default);
+        else input.value = String(field.default);
+      }
+      if (field.options?.length && input.tagName === "SELECT" && !input.options.length) {
+        input.replaceChildren(
+          ...field.options.map((option) => new Option(option.label, option.value)),
+        );
+      }
+      if (field.portal && label && !label.querySelector("[data-provider-field-portal]")) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.providerFieldPortal = field.id;
+        button.className = "storage-field-portal";
+        button.textContent = field.portal.label;
+        button.onclick = () =>
+          openProviderWindow(
+            field.portal.url,
+            `fast-gpu-storage-${definition.id}-${field.id}`,
+          );
+        label.append(button);
+      }
+      if (field.derive) {
+        const sourceName = storageFieldSelectorNames[field.derive.sourceField];
+        const source = sourceName ? $(selectors[sourceName]) : null;
+        if (source && !source.dataset.providerDeriveBound) {
+          source.dataset.providerDeriveBound = "true";
+          source.addEventListener("change", () => {
+            input.value = source.value
+              ? String(field.derive.template || "").replaceAll("{value}", source.value)
+              : "";
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+          });
+        }
+      }
+    }
+    const primaryPortal = definition.portals?.[0];
+    const legend = card?.querySelector(".s3-legend, legend");
+    const toggle = legend?.querySelector(".storage-toggle");
+    if (primaryPortal && legend && toggle && !legend.querySelector(".storage-provider-actions")) {
+      const actions = document.createElement("span");
+      const button = document.createElement("button");
+      actions.className = "storage-provider-actions";
+      button.type = "button";
+      button.className = "storage-console-link";
+      button.textContent = primaryPortal.label;
+      button.onclick = () =>
+        openProviderWindow(primaryPortal.url, `fast-gpu-storage-${definition.id}`);
+      actions.append(button, toggle);
+      legend.append(actions);
+    }
+  }
+  for (const selector of ["#existingStorageProvider", "#storageBrowserProvider"]) {
+    const select = $(selector);
+    if (!select) continue;
+    const previous = select.value;
+    select.replaceChildren(
+      ...(schemaDocument.s3 || []).map(
+        (definition) => new Option(definition.title, definition.id),
+      ),
+    );
+    if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+  }
+  storageDefinitionsLoaded = true;
+}
+var storagePageReady = false;
 // <legend> renders in the fieldset border region, so the card header floats
 // over the card edge. Promote it to a normal grid item that lives inside the
 // padded card.
@@ -127,7 +206,7 @@ function wrapStorageSection(element, title, description, className = "") {
 const storageProviderDisclosure = wrapStorageSection(
   $("#s3Form"),
   "S3 供应商配置",
-  "管理 Cloudflare R2 与阿里云 OSS 的连接凭据",
+  "管理对象存储供应商的连接凭据",
   "storage-provider-disclosure",
 );
 const storageUnavailable = document.createElement("div");
@@ -142,7 +221,7 @@ for (const provider of Object.keys(storageProviderFields)) {
   const button = document.createElement("button");
   button.type = "button";
   button.dataset.storageSummaryProvider = provider;
-  button.textContent = `${provider === "r2" ? "R2" : "OSS"} 新增`;
+  button.textContent = `${provider.toUpperCase()} 新增`;
   button.onclick = (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -163,7 +242,7 @@ $("#storage .storage-settings p").textContent =
 
 $("#storageUploadCard").insertAdjacentHTML(
   "beforebegin",
-  '<section id="storageBrowser" class="table-card storage-browser"><header><div><span class="eyebrow">BUCKET CONTENTS</span><h3>查看 Bucket 内容</h3></div><button id="storageBrowserRefresh" type="button">刷新</button></header><div class="storage-browser-controls"><label>存储源<select id="storageBrowserProvider"><option value="r2">Cloudflare R2</option><option value="oss">阿里云 OSS</option></select></label><label>Prefix<input id="storageBrowserPrefix" placeholder="Bucket 根目录"></label><button id="storageBrowserOpen" class="primary" type="button">查看</button></div><div class="storage-browser-selection"><label><input id="storageBrowserSelectAll" type="checkbox">选择当前已加载对象</label><button id="storageBrowserDelete" class="danger" type="button" disabled>删除所选对象</button></div><div id="storageBrowserMeta" class="storage-browser-meta">先选择一个已启用的存储源。</div><div id="storageBrowserList" class="storage-browser-list"></div><button id="storageBrowserMore" type="button" hidden>加载更多</button></section>',
+  '<section id="storageBrowser" class="table-card storage-browser"><header><div><span class="eyebrow">BUCKET CONTENTS</span><h3>查看 Bucket 内容</h3></div><button id="storageBrowserRefresh" type="button">刷新</button></header><div class="storage-browser-controls"><label>存储源<select id="storageBrowserProvider"><option value="">正在读取厂商…</option></select></label><label>Prefix<input id="storageBrowserPrefix" placeholder="Bucket 根目录"></label><button id="storageBrowserOpen" class="primary" type="button">查看</button></div><div class="storage-browser-selection"><label><input id="storageBrowserSelectAll" type="checkbox">选择当前已加载对象</label><button id="storageBrowserDelete" class="danger" type="button" disabled>删除所选对象</button></div><div id="storageBrowserMeta" class="storage-browser-meta">先选择一个已启用的存储源。</div><div id="storageBrowserList" class="storage-browser-list"></div><button id="storageBrowserMore" type="button" hidden>加载更多</button></section>',
 );
 let storageBrowserToken = null,
   storageBrowserSelected = new Set();
@@ -273,44 +352,9 @@ $("#storageBrowserList").onclick = (event) => {
   loadStorageObjects(false);
 };
 
-for (const provider of [
-  {
-    id: "r2",
-    url: "https://dash.cloudflare.com/?to=/:account/r2",
-    windowName: "fast-gpu-cloudflare-r2",
-    label: "前往 Cloudflare R2 获取 Access Key",
-  },
-  {
-    id: "oss",
-    url: "https://oss.console.aliyun.com/overview",
-    windowName: "fast-gpu-aliyun-oss",
-    label: "前往阿里云 OSS 获取 AccessKey",
-  },
-]) {
-  const legend = document.querySelector(
-      `[data-storage-provider="${provider.id}"] .s3-legend`,
-    ),
-    toggle = legend.querySelector(".storage-toggle"),
-    actions = document.createElement("span"),
-    button = document.createElement("button");
-  actions.className = "storage-provider-actions";
-  button.type = "button";
-  button.className = "storage-console-link";
-  button.textContent = "前往获取凭证 ↗";
-  button.setAttribute("aria-label", provider.label);
-  button.onclick = () => openProviderWindow(provider.url, provider.windowName);
-  actions.append(button, toggle);
-  legend.append(actions);
-}
-$("#r2Region").disabled = true;
-$("#r2Region").classList.add("fixed-storage-value");
-$("#r2Region").insertAdjacentHTML(
-  "afterend",
-  '<small class="fixed-storage-hint">R2 的 S3 API 固定使用 auto</small>',
-);
 storageProviderDisclosure.insertAdjacentHTML(
   "afterend",
-  '<form id="existingStorageForm" class="table-card existing-storage"><div><span class="eyebrow">MANUAL SYNC</span><h3>按需同步到实例</h3><p>选择 Bucket 内的目录或文件，再复制或挂载到实例。</p></div><label>运行中的实例<select id="existingStorageInstance" required><option value="">正在加载…</option></select></label><label>存储源<select id="existingStorageProvider"><option value="r2">Cloudflare R2</option><option value="oss">阿里云 OSS</option></select></label><label>Bucket 内目录或文件<div class="storage-path-picker"><input id="existingStoragePrefix" readonly placeholder="整个 Bucket"><button id="existingStorageBrowse" type="button">浏览…</button></div></label><label>实例目标目录<input id="existingStorageTarget" value="/data/datasets"></label><label>操作<select id="existingStorageMode"><option value="copy">复制到本地磁盘</option><option value="mount">只读挂载</option></select><small id="existingStorageModeHelp" class="storage-mode-help"></small><span id="existingStorageAutoInstallRow" class="storage-auto-install"><input id="existingStorageAutoInstall" type="checkbox" checked disabled>自动安装必要依赖</span></label><button class="primary" type="submit">开始复制</button><small id="existingStorageHint">新实例不会自动读取 S3；请选择内容后再执行操作。</small></form>',
+  '<form id="existingStorageForm" class="table-card existing-storage"><div><span class="eyebrow">MANUAL SYNC</span><h3>按需同步到实例</h3><p>选择 Bucket 内的目录或文件，再复制或挂载到实例。</p></div><label>运行中的实例<select id="existingStorageInstance" required><option value="">正在加载…</option></select></label><label>存储源<select id="existingStorageProvider"><option value="">正在读取厂商…</option></select></label><label>Bucket 内目录或文件<div class="storage-path-picker"><input id="existingStoragePrefix" readonly placeholder="整个 Bucket"><button id="existingStorageBrowse" type="button">浏览…</button></div></label><label>实例目标目录<input id="existingStorageTarget" value="/data/datasets"></label><label>操作<select id="existingStorageMode"><option value="copy">复制到本地磁盘</option><option value="mount">只读挂载</option></select><small id="existingStorageModeHelp" class="storage-mode-help"></small><span id="existingStorageAutoInstallRow" class="storage-auto-install"><input id="existingStorageAutoInstall" type="checkbox" checked disabled>自动安装必要依赖</span></label><button class="primary" type="submit">开始复制</button><small id="existingStorageHint">新实例不会自动读取 S3；请选择内容后再执行操作。</small></form>',
 );
 document.body.insertAdjacentHTML(
   "beforeend",
@@ -567,7 +611,6 @@ function updateStorageUploadProviders(providers) {
     unavailable = $("#storageUploadUnavailable"),
     form = $("#storageUploadForm");
   if (!select || !unavailable || !form) return;
-  const labels = { r2: "Cloudflare R2", oss: "阿里云 OSS" };
   const available = Object.entries(providers || {}).filter(
     ([, item]) => item && item.enabled && item.configured,
   );
@@ -575,7 +618,7 @@ function updateStorageUploadProviders(providers) {
   select.innerHTML = available
     .map(
       ([id, item]) =>
-        `<option value="${esc(id)}">${esc(labels[id] || id.toUpperCase())}${item.bucket ? " · " + esc(item.bucket) : ""}</option>`,
+        `<option value="${esc(id)}">${esc(storageProviderTitles.get(id) || id.toUpperCase())}${item.bucket ? " · " + esc(item.bucket) : ""}</option>`,
     )
     .join("");
   if (available.length) {
@@ -596,7 +639,9 @@ function showStorageProfile(provider, profileId) {
   $(fields.endpoint).value = profile?.endpoint || "";
   $(fields.bucket).value = profile?.bucket || "";
   $(fields.prefix).value = profile?.prefix || "";
-  $(fields.region).value = profile?.region || (provider === "r2" ? "auto" : "");
+  const regionDefinition = storageProviderDefinitions
+    .get(provider)?.fields?.find((field) => field.id === "region");
+  $(fields.region).value = profile?.region || regionDefinition?.default || "";
   $(fields.accessKey).value = profile?.accessKeyId || "";
   $(fields.secretKey).value = profile?.secretAccessKey || "";
   $(fields.remove).disabled = !profile;
@@ -875,6 +920,9 @@ $("#storageUploadStart").onclick = async function () {
 };
 async function loadS3Config() {
   if (!storagePageReady) return;
+  await loadStorageProviderDefinitions().catch((error) =>
+    console.warn("Storage provider declarations unavailable; using built-in fallback", error),
+  );
   let c;
   try {
     c = await request("/api/storage/providers");
@@ -920,7 +968,7 @@ async function loadS3Config() {
   storageProviderConfigured[provider] = Boolean(item.configured);
     const summaryButton = storageSummaryActions.querySelector(`[data-storage-summary-provider="${provider}"]`);
     if (summaryButton) {
-      summaryButton.textContent = `${provider === "r2" ? "R2" : "OSS"} ${item.profiles?.length ? "修改" : "新增"}`;
+      summaryButton.textContent = `${storageProviderTitles.get(provider) || provider.toUpperCase()} ${item.profiles?.length ? "修改" : "新增"}`;
       summaryButton.className = item.profiles?.length ? "has-profile" : "";
     }
   }
@@ -949,7 +997,6 @@ async function loadS3Config() {
   const configured = Object.entries(c.providers || {}).filter(
       ([, item]) => item.configured,
     ),
-    labels = { r2: "R2", oss: "OSS" },
     allVerified =
       configured.length > 0 &&
       configured.every(
@@ -969,7 +1016,7 @@ async function loadS3Config() {
     ? configured
         .map(
           ([id, item]) =>
-            `${labels[id] || id.toUpperCase()} 联通${item.verification?.connected ? "✓" : "✗"} 上传${item.verification?.upload ? "✓" : "✗"} 下载${item.verification?.download ? "✓" : "✗"}`,
+            `${storageProviderTitles.get(id) || id.toUpperCase()} 联通${item.verification?.connected ? "✓" : "✗"} 上传${item.verification?.upload ? "✓" : "✗"} 下载${item.verification?.download ? "✓" : "✗"}`,
         )
         .join(" · ")
     : "尚未配置";
@@ -980,11 +1027,6 @@ async function loadS3Config() {
   for (const [provider, fields] of Object.entries(storageProviderFields))
     $(`#existingStorageProvider option[value="${provider}"]`).disabled = !$(fields.enabled).checked;
 }
-$("#ossRegion").onchange = function () {
-  $("#ossEndpoint").value = this.value
-    ? `https://oss-${this.value}.aliyuncs.com`
-    : "";
-};
 function createSearchableSelect(select) {
   const root = document.createElement("div"),
     trigger = document.createElement("button"),
@@ -1002,7 +1044,7 @@ function createSearchableSelect(select) {
   search.type = "search";
   search.className = "searchable-select-search";
   search.placeholder = "搜索地区或 Region ID";
-  search.setAttribute("aria-label", "搜索阿里云 OSS 地区");
+  search.setAttribute("aria-label", "搜索 Region");
   list.className = "searchable-select-list";
   list.setAttribute("role", "listbox");
   empty.className = "searchable-select-empty";
@@ -1118,7 +1160,8 @@ function createSearchableSelect(select) {
   });
   syncTrigger();
 }
-createSearchableSelect($("#ossRegion"));
+for (const fields of Object.values(storageProviderFields))
+  createSearchableSelect($(fields.region));
 async function saveStorageProvider(provider) {
   const fields = storageProviderFields[provider], button = $(fields.save), values = {
     enabled: $(fields.enabled).checked,

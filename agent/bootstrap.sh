@@ -146,18 +146,30 @@ fi
 # The initial start check runs before a remotely fetched agent is available.
 # Run it again after installation so fresh instances start the listener too.
 start_existing_agent
-configure_storage_remote() {
-  local name="$1" endpoint="$2" access_key="$3" secret_key="$4" region="${5:-}"
-  local args=(config create "$name" s3 provider Other endpoint "$endpoint" access_key_id "$access_key" secret_access_key "$secret_key" env_auth false)
-  [[ -n "$region" ]] && args+=(region "$region")
-  rclone "${args[@]}"
+configure_storage_remotes() {
+  [[ -n "${FLEET_STORAGE_PROVIDERS_B64:-}" ]] || return 0
+  python3 - "$FLEET_STORAGE_PROVIDERS_B64" <<'PY'
+import base64
+import json
+import subprocess
+import sys
+
+providers = json.loads(base64.b64decode(sys.argv[1]))
+for item in providers:
+    args = [
+        "rclone", "config", "create", item["name"], "s3",
+        "provider", item.get("provider") or "Other",
+        "endpoint", item["endpoint"],
+        "access_key_id", item["accessKeyId"],
+        "secret_access_key", item["secretAccessKey"],
+        "env_auth", "false",
+    ]
+    if item.get("region"):
+        args.extend(["region", item["region"]])
+    subprocess.run(args, check=True)
+PY
 }
-if [[ "${R2_S3_ENABLED:-}" == 1 ]]; then
-  configure_storage_remote r2 "$R2_S3_ENDPOINT" "$R2_S3_ACCESS_KEY_ID" "$R2_S3_SECRET_ACCESS_KEY" "${R2_S3_REGION:-auto}"
-fi
-if [[ "${OSS_S3_ENABLED:-}" == 1 ]]; then
-  configure_storage_remote oss "$OSS_S3_ENDPOINT" "$OSS_S3_ACCESS_KEY_ID" "$OSS_S3_SECRET_ACCESS_KEY" "${OSS_S3_REGION:-}"
-fi
+configure_storage_remotes
 start_existing_agent
 trap - ERR
 if python3 -c "import json; raise SystemExit(not json.load(open('/var/lib/fast-gpu/profile.json')).get('warnings'))"; then

@@ -1,5 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {adapters,normalizeStatus,ppioPriceToCny,AUTODL_PUBLIC_IMAGES}=require('../lib/providers');
+const {adapters,normalizeStatus,AUTODL_PUBLIC_IMAGES}=require('../lib/providers');
+const {ppioPriceToCny}=require('../lib/cloud_compute/ppio/adapter');
 const {createAutoDLImageImportManager}=require('../lib/autodl-image-imports');
 const {bootstrapCommand,validateProvisioning,publicControlPlaneError,resolveCuda13Image}=require('../lib/provisioning');
 const {ppioStartupCommand}=require('../lib/provider-startup/ppio');

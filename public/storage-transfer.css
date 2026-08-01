@@ -1,3 +1,5 @@
+@import url("/responsive.css");
+
 #sshDialog { width: min(1040px, calc(100vw - 56px)); max-height: calc(100vh - 64px); overflow: auto; }
 #sshDialog form { padding-top: 0; }
 .electron-client #sshDialog { position: fixed; top: 58px; margin-top: 0; box-shadow: 0 0 0 100vmax #07110c99, 0 30px 80px #0004; }

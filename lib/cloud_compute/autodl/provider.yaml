@@ -1,0 +1,20 @@
+{
+  "id": "autodl",
+  "order": 20,
+  "kind": "cloud_compute",
+  "credentialEnv": "AUTODL_TOKEN",
+  "currency": "人民币",
+  "title": "AutoDL",
+  "description": "国内 GPU 算力平台",
+  "clientModule": "client.js",
+  "launch": {"profileType":"docker","managedSsh":true,"providerImage":true},
+  "errorPolicies": {"autodl_no_compatible_host":"invalidate-offer"},
+  "instanceAccess": {"level":"limited","label":"普通网页实例暂不能接入","description":"当前使用独立的容器实例 API；该 API 创建的实例可同步并可用接口返回的 SSH 密码接入，未出现在该 API 列表中的普通网页实例无法发现。"},
+  "portals": [
+    {"id":"billing","label":"打开充值页面","url":"https://www.autodl.com/console/wallet"},
+    {"id":"key","label":"获取 Token","url":"https://www.autodl.com/console/settings"}
+  ],
+  "fields": [
+    {"id":"apiKey","storageKey":"autodl","label":"Token","control":"password","masked":true,"required":true,"placeholder":"粘贴 AutoDL Token","portal":{"label":"获取 Token","url":"https://www.autodl.com/console/settings"}}
+  ]
+}

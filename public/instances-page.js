@@ -554,7 +554,7 @@ $("#instanceAdoptionForm").onsubmit = async function (event) {
 loadInstances = async function () {
   ({ instances } = await request("/api/instances"));
   syncTelemetryStreams();
-  applyInstancePrices();
+  runProviderExtensionHook("instancesLoaded", { instances });
   updateInstanceBadge();
   updateInstanceTotalSpend();
   updateInstanceEmptyState();

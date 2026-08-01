@@ -1,0 +1,18 @@
+{
+  "id": "r2",
+  "order": 10,
+  "kind": "s3",
+  "title": "Cloudflare R2",
+  "description": "海外对象存储",
+  "validationLabel": "R2 S3",
+  "portals": [{"id":"key","label":"管理 R2 API Token","url":"https://dash.cloudflare.com/?to=/:account/r2/api-tokens"}],
+  "fields": [
+    {"id":"enabled","storageKey":"R2_S3_ENABLED","label":"启用","control":"checkbox","masked":false,"required":false,"default":false},
+    {"id":"endpoint","storageKey":"R2_S3_ENDPOINT","label":"Endpoint","control":"url","masked":false,"required":true,"placeholder":"https://<ACCOUNT_ID>.r2.cloudflarestorage.com"},
+    {"id":"bucket","storageKey":"R2_S3_BUCKET","label":"Bucket","control":"text","masked":false,"required":true,"placeholder":"fast-gpu-datasets"},
+    {"id":"prefix","storageKey":"R2_S3_PREFIX","label":"Prefix（可选）","control":"text","masked":false,"required":false,"placeholder":"datasets"},
+    {"id":"region","storageKey":"R2_S3_REGION","label":"Region","control":"select","masked":false,"required":false,"default":"auto","readOnly":true,"hint":"S3 API 固定使用 auto","options":[{"value":"auto","label":"Auto（Cloudflare R2）"}]},
+    {"id":"accessKeyId","storageKey":"R2_S3_ACCESS_KEY_ID","label":"Access Key ID","control":"text","masked":false,"required":true,"placeholder":"Access Key ID","portal":{"label":"获取 Key","url":"https://dash.cloudflare.com/?to=/:account/r2/api-tokens"}},
+    {"id":"secretAccessKey","storageKey":"R2_S3_SECRET_ACCESS_KEY","label":"Secret Access Key","control":"password","masked":true,"required":true,"placeholder":"Secret Access Key","portal":{"label":"获取 Secret","url":"https://dash.cloudflare.com/?to=/:account/r2/api-tokens"}}
+  ]
+}

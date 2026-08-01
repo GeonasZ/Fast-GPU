@@ -70,19 +70,24 @@ test("provider inventory cleanup never treats durable keypairs as instances", ()
 });
 
 test("Hyperstack keypair picker exposes per-entity delete controls", () => {
-  assert.match(source, /data-delete-keypair/);
-  assert.match(source, /method:\s*"DELETE"/);
+  const extension = require("node:fs").readFileSync(
+    path.join(__dirname, "..", "lib", "cloud_compute", "hyperstack", "client.js"),
+    "utf8",
+  );
+  assert.match(extension, /data-delete-keypair/);
+  assert.match(extension, /method:\s*'DELETE'/);
 });
 
 test("unmanaged Hyperstack keypairs are visibly blocked from VM configuration", () => {
-  assert.match(source, /非平台管理 · 不可创建 VM/);
-  assert.match(source, /configSubmit\.disabled = !managed/);
-  assert.match(source, /keypairOption\?\.dataset\.managed !== "true"/);
+  const extension = require("node:fs").readFileSync(
+    path.join(__dirname, "..", "lib", "cloud_compute", "hyperstack", "client.js"),
+    "utf8",
+  );
+  assert.match(extension, /只能删除平台托管的 Keypair/);
+  assert.match(extension, /platformManaged/);
 });
 
 test("shared provisioning checks are not reported as every provider being incomplete", () => {
-  assert.match(
-    source,
-    /item\.id === "hyperstack"[\s\S]*startsWith\("HYPERSTACK_"\)/,
-  );
+  assert.match(source, /item\.configured && item\.provisioningReady === false/);
+  assert.doesNotMatch(source, /startsWith\("HYPERSTACK_"\)/);
 });

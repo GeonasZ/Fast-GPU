@@ -1,0 +1,1 @@
+{"directory":"pytorch_2_10","id":"preset-pytorch-2.10","name":"PyTorch 2.10 / CUDA 13.1 完整环境","profileType":"docker","image":"{repository}:pytorch-2.10-cuda13.1-ngc26.01","cudaMajor":13,"kind":"complete"}

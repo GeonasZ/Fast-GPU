@@ -1,36 +1,92 @@
-const billingProviders = [
-  {
-    id: "ppio",
-    name: "PPIO 派欧云",
-    currency: "人民币",
-    url: "https://ppio.com/billing",
-    keyUrl: "https://ppio.com/settings/key-management",
-  },
-  {
-    id: "autodl",
-    name: "AutoDL",
-    currency: "人民币",
-    url: "https://www.autodl.com/",
-    keyUrl: "https://www.autodl.com/",
-  },
-  {
-    id: "hyperstack",
-    name: "Hyperstack",
-    currency: "美元",
-    url: "https://console.hyperstack.cloud/",
-    keyUrl: "https://console.hyperstack.cloud/api-keys",
-  },
-  {
-    id: "runpod",
-    name: "RunPod",
-    currency: "美元",
-    url: "https://www.console.runpod.io/user/billing",
-    keyUrl: "https://www.console.runpod.io/user/settings",
-  },
-];
-let activeBillingProvider = "ppio",
+const billingProviders = [];
+let activeBillingProvider = "",
   providerConfigStatus = [],
+  providerFieldDefinitions = new Map(),
+  providerDefinitions = new Map(),
   billingProviderRenderId = 0;
+const providerExtensions = new Map(),
+  providerExtensionLoads = new Map();
+globalThis.registerProviderExtension = (id, extension) =>
+  providerExtensions.set(String(id), Object.freeze({ ...extension }));
+function providerExtension(id) {
+  return providerExtensions.get(String(id)) || {};
+}
+function runProviderExtensionHook(name, context) {
+  for (const extension of providerExtensions.values()) {
+    const hook = extension[name];
+    if (typeof hook !== "function") continue;
+    try {
+      hook.call(extension, context);
+    } catch (error) {
+      console.warn(`Provider extension hook ${name} failed`, error);
+    }
+  }
+}
+async function loadProviderExtension(definition) {
+  if (!definition.clientModule || providerExtensionLoads.has(definition.id))
+    return providerExtensionLoads.get(definition.id);
+  const loaded = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = definition.clientModule;
+    script.async = true;
+    script.onload = resolve;
+    script.onerror = () => reject(Error(`无法加载 ${definition.title} 页面扩展`));
+    document.head.append(script);
+  });
+  providerExtensionLoads.set(definition.id, loaded);
+  return loaded;
+}
+
+function applyProviderDefinitions(document) {
+  for (const definition of document.cloudCompute || []) {
+    providerDefinitions.set(definition.id, definition);
+    const current = billingProviders.find((item) => item.id === definition.id);
+    if (!current) {
+      billingProviders.push({
+        id: definition.id,
+        name: definition.title,
+        currency: definition.currency || "",
+        url: definition.portals?.find((portal) => portal.id === "billing")?.url || "",
+        keyUrl: definition.portals?.find((portal) => portal.id === "key")?.url || "",
+      });
+    } else {
+      current.name = definition.title || current.name;
+      current.description = definition.description || current.description;
+      current.currency = definition.currency || current.currency;
+      current.url = definition.portals?.find((portal) => portal.id === "billing")?.url || current.url;
+      current.keyUrl = definition.portals?.find((portal) => portal.id === "key")?.url || current.keyUrl;
+    }
+    providerFieldDefinitions.set(definition.id, definition.fields || []);
+  }
+  const providerFilter = $("#providerFilter");
+  if ($("#providerCount"))
+    $("#providerCount").textContent = String((document.cloudCompute || []).length);
+  if (providerFilter) {
+    const previous = providerFilter.value;
+    providerFilter.replaceChildren(
+      new Option("全部供应商", ""),
+      ...(document.cloudCompute || []).map(
+        (definition) => new Option(definition.title, definition.title),
+      ),
+    );
+    providerFilter.value = previous;
+  }
+  const accessList = $("#instanceAccessInfoList");
+  if (accessList)
+    accessList.innerHTML = (document.cloudCompute || [])
+      .filter((definition) => definition.instanceAccess)
+      .map((definition) => `<article class="access-${esc(definition.instanceAccess.level)}"><header><strong>${esc(definition.title)}</strong><span>${esc(definition.instanceAccess.label)}</span></header><p>${esc(definition.instanceAccess.description)}</p></article>`)
+      .join("");
+  if (!activeBillingProvider) activeBillingProvider = billingProviders[0]?.id || "";
+}
+
+async function loadProviderDefinitions() {
+  if (providerFieldDefinitions.size) return;
+  const definitions = await request("/api/provider-config");
+  applyProviderDefinitions(definitions);
+  await Promise.all((definitions.cloudCompute || []).map(loadProviderExtension));
+  runProviderExtensionHook("instancesLoaded", { instances });
+}
 function updateProviderConnectionSummary(
   view = readUiState().view || "market",
 ) {
@@ -45,12 +101,7 @@ function updateProviderConnectionSummary(
   const disconnected = providerConfigStatus.filter((item) => !item.configured);
   const expired = providerConfigStatus.filter((item) => item.authIssue);
   const incomplete = providerConfigStatus.filter(
-    (item) =>
-      item.id === "hyperstack" &&
-      item.configured &&
-      item.missing?.some((requirement) =>
-        String(requirement).startsWith("HYPERSTACK_"),
-      ),
+    (item) => item.configured && item.provisioningReady === false,
   );
   if (expired.length) {
     summary.className = "system disconnected";
@@ -61,11 +112,7 @@ function updateProviderConnectionSummary(
   } else if (incomplete.length) {
     summary.className = "system warning";
     const incompleteText = incomplete
-      .map((item) =>
-        item.id === "hyperstack"
-          ? `${esc(item.name)}（请前往供应商账户中心配置）`
-          : esc(item.name),
-      )
+      .map((item) => `${esc(item.name)}（请前往供应商账户中心配置）`)
       .join("、");
     summary.innerHTML = `<i></i> 配置未完成：${incompleteText}`;
   } else {
@@ -297,19 +344,30 @@ async function showBillingProvider(id) {
   const status = providerConfigStatus.find((x) => x.id === provider.id),
     billingButton = $("#launchBillingPortal"),
     keyButton = $("#launchKeyPortal");
-  $("#hyperstackConfigForm").hidden = true;
-  $("#openAutoDLImageImport").hidden = true;
+  let extensionHost = $("#providerExtensionHost");
+  if (!extensionHost) {
+    extensionHost = document.createElement("div");
+    extensionHost.id = "providerExtensionHost";
+    $("#providerKeyForm").after(extensionHost);
+  }
+  extensionHost.replaceChildren();
   $("#billingMark").textContent = provider.name[0];
   $("#billingTitle").textContent = `${provider.name} · 账户与 API Key`;
   $("#billingDescription").textContent =
-    provider.id === "hyperstack"
-      ? "保存 API Key 后，平台会自动读取 Environment、SSH Keypair 和宿主机系统。"
-      : "余额不足时可先充值；Key 缺失或需要更换时，可打开官方页面获取并粘贴到下方。";
+    provider.description ||
+    "余额不足时可先充值；Key 缺失或需要更换时，可打开官方页面获取并粘贴到下方。";
   billingButton.disabled = false;
   billingButton.textContent = "打开充值页面 ↗";
   keyButton.disabled = false;
   keyButton.textContent = "获取 API Key ↗";
   $("#providerApiKey").value = "";
+  const apiKeyField = (providerFieldDefinitions.get(provider.id) || []).find(
+    (field) => field.id === "apiKey",
+  );
+  if (apiKeyField) {
+    $("#providerApiKey").placeholder = apiKeyField.placeholder || apiKeyField.label;
+    $("#providerApiKey").type = apiKeyField.masked ? "password" : "text";
+  }
   renderProviderKeys(provider, status);
   billingButton.onclick = () =>
     openProviderWindow(provider.url, "fast-gpu-provider-billing");
@@ -320,139 +378,26 @@ async function showBillingProvider(id) {
     );
   await renderProviderBalance(provider, status, isCurrent);
   if (!isCurrent()) return;
-  const showHyperstackConfig =
-    provider.id === "hyperstack" && status?.configured;
-  if (showHyperstackConfig)
-    setHyperstackConfigCollapsed(
-      Boolean(status.hyperstackConfig?.environment),
-      status.hyperstackConfig,
-    );
-  $("#hyperstackConfigForm").hidden = !showHyperstackConfig;
-  $("#openAutoDLImageImport").hidden =
-    provider.id !== "autodl" || !status?.configured;
-  if (showHyperstackConfig) {
-    await loadHyperstackResources(status.hyperstackConfig);
-    if (isCurrent())
-      setHyperstackConfigCollapsed(
-        Boolean(status.hyperstackConfig?.environment),
-        status.hyperstackConfig,
-      );
-  }
+  await providerExtension(provider.id).renderBilling?.({
+    host: extensionHost,
+    provider,
+    definition: providerDefinitions.get(provider.id),
+    status,
+    isCurrent,
+    refresh: async () => {
+      await loadProviderConfig();
+      await showBillingProvider(provider.id);
+    },
+  });
 }
-let autodlImportPoll;
-function autodlSelectionMode() {
-  return (
-    document.querySelector('input[name="autodlSelectionMode"]:checked')
-      ?.value || "manual"
-  );
-}
-async function loadAutoDLImportOptions() {
-  const mode = autodlSelectionMode(),
-    status = $("#autodlImportStatus"),
-    button = $("#startAutoDLImageImport");
-  $("#autodlManualGpuWrap").hidden = mode !== "manual";
-  $("#autodlMaxPriceWrap").hidden = mode !== "auto";
-  button.disabled = true;
-  status.textContent =
-    mode === "auto" ? "正在读取实验性网页报价…" : "正在读取可用 GPU…";
-  try {
-    const data = await request(
-        `/api/providers/autodl/image-import/options?mode=${mode}`,
-      ),
-      products = data.products || [];
-    $("#autodlManualGpu").innerHTML = products
-      .map(
-        (product) =>
-          `<option value="${esc(product.id)}">${esc(product.name || product.id)}</option>`,
-      )
-      .join("");
-    if (mode === "auto") {
-      const offers = data.offers || [];
-      $("#autodlMarketHint").textContent =
-        data.warning || `发现 ${offers.length} 个可验证报价`;
-      status.textContent = data.unavailable
-        ? `自动选价不可用：${data.warning}`
-        : `已找到 ${offers.length} 个有库存且价格明确的候选；提交时会重新查询。`;
-      button.disabled = Boolean(data.unavailable || !offers.length);
-    } else {
-      status.textContent = `可手动选择 ${products.length} 种 GPU；AutoDL Pro API 创建响应不会提前给出最终价格。`;
-      button.disabled = !products.length;
-    }
-  } catch (error) {
-    status.textContent = "读取选项失败：" + error.message;
-  }
-}
-async function pollAutoDLImageImport(id) {
-  clearTimeout(autodlImportPoll);
-  try {
-    const job = await request(
-        `/api/providers/autodl/image-imports/${encodeURIComponent(id)}`,
-      ),
-      price = Number.isFinite(job.actualPrice)
-        ? ` · 实际 ¥${job.actualPrice.toFixed(3)}/小时`
-        : "",
-      instance = job.instanceId ? ` · 临时实例 ${job.instanceId}` : "";
-    $("#autodlImportStatus").textContent =
-      `${job.message}${price}${instance}${job.error ? "：" + job.error : ""}`;
-    if (job.status === "running")
-      autodlImportPoll = setTimeout(() => pollAutoDLImageImport(id), 3000);
-    else {
-      $("#startAutoDLImageImport").disabled = false;
-      toast(
-        job.status === "completed"
-          ? "镜像转存完成，临时实例已释放"
-          : "镜像转存需要处理，请查看状态说明",
-      );
-    }
-  } catch (error) {
-    $("#autodlImportStatus").textContent = "读取任务状态失败：" + error.message;
-  }
-}
-$("#openAutoDLImageImport").onclick = async () => {
-  $("#autodlConfirmCost").checked = false;
-  $("#autodlImageImportDialog").showModal();
-  await loadAutoDLImportOptions();
-};
-$$('input[name="autodlSelectionMode"]').forEach(
-  (input) => (input.onchange = loadAutoDLImportOptions),
-);
-$$("#autodlImageImportForm button[formnovalidate]").forEach(
-  (button) =>
-    (button.onclick = (event) => {
-      event.preventDefault();
-      $("#autodlImageImportDialog").close("cancel");
-    }),
-);
-$("#autodlImageImportForm").onsubmit = async (event) => {
-  event.preventDefault();
-  const button = $("#startAutoDLImageImport");
-  if (!$("#autodlConfirmCost").checked)
-    return toast("请先确认费用和失败处理风险");
-  setButtonBusy(button, "正在提交…");
-  try {
-    const job = await request("/api/providers/autodl/image-imports", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        sourceImageUuid: $("#autodlSourceImageUuid").value,
-        imageName: $("#autodlTargetImageName").value,
-        selectionMode: autodlSelectionMode(),
-        productId: $("#autodlManualGpu").value,
-        maxPrice: Number($("#autodlMaxPrice").value),
-        confirmCost: true,
-      }),
-    });
-    $("#autodlImportStatus").textContent = "任务已创建，正在确定 GPU…";
-    pollAutoDLImageImport(job.id);
-  } catch (error) {
-    $("#autodlImportStatus").textContent = "提交失败：" + error.message;
-  } finally {
-    clearButtonBusy(button);
-  }
-};
 async function loadProviderConfig() {
   try {
-    const config = await request("/api/config/status");
+    const [config] = await Promise.all([
+      request("/api/config/status"),
+      loadProviderDefinitions().catch((error) =>
+        console.warn("Provider declarations unavailable; using built-in fallback", error),
+      ),
+    ]);
     providerConfigStatus = config.providers || [];
     updateProviderConnectionSummary();
   } catch (error) {
@@ -477,461 +422,9 @@ $("#providerKeyForm").onsubmit = async (event) => {
     $("#providerApiKeyLabel").value = "";
     await loadProviderConfig();
     await showBillingProvider(provider.id);
-    toast(
-      provider.id === "hyperstack"
-        ? "API Key 已验证，请选择部署资源"
-        : `${provider.name} API Key 已加密保存并立即生效`,
-    );
+    toast(`${provider.name} API Key 已验证、加密保存并立即生效`);
   } catch (error) {
     toast("保存或验证失败：" + error.message);
-  } finally {
-    button.disabled = false;
-  }
-};
-function setupHyperstackConfigCollapse() {
-  const form = $("#hyperstackConfigForm"),
-    head = form.querySelector(".hyperstack-config-head");
-  const actions = document.createElement("div");
-  actions.className = "hyperstack-config-head-actions";
-  const refresh = $("#refreshHyperstackResources"),
-    toggle = document.createElement("button");
-  toggle.id = "toggleHyperstackConfig";
-  toggle.type = "button";
-  toggle.setAttribute("aria-expanded", "true");
-  toggle.textContent = "收起";
-  actions.append(refresh, toggle);
-  head.append(actions);
-  const summary = document.createElement("div");
-  summary.id = "hyperstackConfigSummary";
-  summary.className = "hyperstack-config-summary";
-  summary.hidden = true;
-  head.after(summary);
-  const shell = document.createElement("div"),
-    body = document.createElement("div");
-  shell.className = "hyperstack-config-body-shell";
-  body.className = "hyperstack-config-body";
-  [...form.children]
-    .filter((child) => child !== head && child !== summary)
-    .forEach((child) => body.append(child));
-  shell.append(body);
-  form.append(shell);
-  toggle.onclick = () =>
-    setHyperstackConfigCollapsed(
-      toggle.getAttribute("aria-expanded") === "true",
-    );
-}
-function setHyperstackConfigCollapsed(collapsed, saved = {}) {
-  const form = $("#hyperstackConfigForm"),
-    toggle = $("#toggleHyperstackConfig"),
-    summary = $("#hyperstackConfigSummary");
-  form.classList.toggle("collapsed", collapsed);
-  toggle.setAttribute("aria-expanded", String(!collapsed));
-  toggle.textContent = collapsed ? "查看或修改" : "收起";
-  const values = [
-    saved.environment || $("#hyperstackEnvironment").value,
-    saved.keyName || $("#hyperstackKeypair").value,
-    saved.region || $("#hyperstackKeypair").selectedOptions[0]?.dataset.region,
-    saved.imageName || $("#hyperstackImage").value,
-  ].filter(Boolean);
-  summary.textContent = values.length
-    ? `✓ 已保存 · ${values.join(" · ")}`
-    : "尚未保存部署配置";
-  summary.hidden = !collapsed;
-}
-if (!$("#hyperstackImageUser")) {
-  const form = $("#hyperstackConfigForm"),
-    submit = form.querySelector('button[type="submit"]'),
-    imageUserLabel = document.createElement("label");
-  imageUserLabel.innerHTML =
-    '宿主机 SSH 用户 <span class="default-value-tag">默认值，可选修改</span><input id="hyperstackImageUser" autocomplete="username" placeholder="例如 ubuntu、debian">';
-  submit.before(imageUserLabel);
-}
-setupHyperstackConfigCollapse();
-async function loadHyperstackResources(saved = {}) {
-  const form = $("#hyperstackConfigForm"),
-    status = $("#hyperstackConfigStatus");
-  form.hidden = false;
-  status.textContent = "正在从 Hyperstack 读取资源…";
-  for (const id of [
-    "hyperstackEnvironment",
-    "hyperstackKeypair",
-    "hyperstackImage",
-  ])
-    $("#" + id).disabled = true;
-  try {
-    const data = await request("/api/providers/hyperstack/resources"),
-      environment = $("#hyperstackEnvironment"),
-      keypair = $("#hyperstackKeypair"),
-      image = $("#hyperstackImage");
-    environment.innerHTML = (data.environments || [])
-      .map(
-        (x) =>
-          `<option value="${esc(x.name)}">${esc(x.name)} · ${esc(x.region || "未知区域")}</option>`,
-      )
-      .join("");
-    const keypairs = data.keypairs || [];
-    keypair.innerHTML = keypairs.length
-      ? keypairs
-          .map(
-        (x) =>
-          `<option value="${esc(x.name)}" data-keypair-id="${esc(x.id)}" data-managed="${x.platformManaged ? "true" : ""}" data-policy-mode="${esc(x.registrationPolicy?.mode || "on-demand")}" data-policy-environments="${esc(JSON.stringify(x.registrationPolicy?.environments || []))}" data-environment="${esc(x.environmentName || "")}" data-region="${esc(x.region || "")}">${esc(x.name)}${x.environmentName ? " · " + esc(x.environmentName) : ""}${x.region ? " · " + esc(x.region) : " · 区域未知"}${x.platformManaged ? " · 平台管理" : ""}</option>`,
-      )
-          .join("")
-      : '<option value="">当前没有 SSH Keypair</option>';
-    keypair.disabled = !keypairs.length;
-    image.innerHTML = (data.images || [])
-      .map((x) => `<option value="${esc(x.name)}">${esc(x.name)}</option>`)
-      .join("");
-    if (saved.environment) environment.value = saved.environment;
-    if (saved.keypairId) {
-      const savedOption = [...keypair.options].find(
-        (option) => option.dataset.keypairId === String(saved.keypairId),
-      );
-      if (savedOption) savedOption.selected = true;
-    } else if (saved.keyName) keypair.value = saved.keyName;
-    if (saved.imageName) image.value = saved.imageName;
-    const inferHyperstackImageUser = () => {
-      const name = image.value.toLowerCase();
-      if (name.includes("debian")) return "debian";
-      if (name.includes("centos")) return "centos";
-      if (name.includes("rocky") || name.includes("alma")) return "rocky";
-      return "ubuntu";
-    };
-    $("#hyperstackImageUser").value =
-      saved.imageUser || inferHyperstackImageUser();
-    $("#hyperstackAgentCidr").value = saved.agentCidr || "0.0.0.0/0";
-    const filterKeypairs = () => {
-      const selected = environment.value;
-      [...keypair.options].forEach(
-        (option) =>
-          (option.hidden = Boolean(
-            option.dataset.environment &&
-            option.dataset.environment !== selected,
-          )),
-      );
-      if (keypair.selectedOptions[0]?.hidden) {
-        const availableIndex = [...keypair.options].findIndex(
-          (option) => !option.hidden,
-        );
-        keypair.selectedIndex = availableIndex;
-      }
-      renderHyperstackKeypairPicker();
-      renderHyperstackKeypairRegistration(data.environments || []);
-    };
-    environment.onchange = filterKeypairs;
-    keypair.onchange = () =>
-      renderHyperstackKeypairRegistration(data.environments || []);
-    image.onchange = () => {
-      $("#hyperstackImageUser").value = inferHyperstackImageUser();
-    };
-    filterKeypairs();
-    status.textContent = keypairs.length
-      ? `已读取 ${data.environments?.length || 0} 个 Environment、${keypairs.length} 个 Keypair、${data.images?.length || 0} 个镜像`
-      : "尚无 SSH Keypair，请先由平台创建一个";
-  } catch (error) {
-    status.textContent = "资源读取失败：" + error.message;
-    toast(status.textContent);
-  } finally {
-    $("#hyperstackEnvironment").disabled = false;
-    $("#hyperstackImage").disabled = false;
-    $("#hyperstackKeypair").disabled = !$("#hyperstackKeypair")
-      .selectedOptions[0]?.dataset.keypairId;
-  }
-}
-$("#refreshHyperstackResources").onclick = () =>
-  loadHyperstackResources(
-    providerConfigStatus.find((x) => x.id === "hyperstack")?.hyperstackConfig,
-  );
-if (!$("#createHyperstackKeypair")) {
-  const button = document.createElement("button"),
-    keypairSelect = $("#hyperstackKeypair"),
-    keypairLabel = keypairSelect.parentElement,
-    keypairTitle = document.createElement("span");
-  button.id = "createHyperstackKeypair";
-  button.type = "button";
-  button.className = "field-link-button";
-  button.textContent = "＋ 平台创建";
-  keypairTitle.className = "hyperstack-field-title";
-  keypairTitle.textContent = "SSH Keypair";
-  keypairTitle.append(button);
-  keypairLabel.firstChild.remove();
-  keypairLabel.insertBefore(keypairTitle, keypairSelect);
-  const ownershipNotice = document.createElement("small");
-  ownershipNotice.id = "hyperstackKeypairOwnershipNotice";
-  ownershipNotice.className = "hyperstack-keypair-ownership-notice";
-  ownershipNotice.setAttribute("role", "status");
-  ownershipNotice.hidden = true;
-  keypairSelect.after(ownershipNotice);
-  const picker = document.createElement("div");
-  picker.id = "hyperstackKeypairPicker";
-  picker.className = "entity-picker";
-  picker.innerHTML =
-    '<button type="button" class="entity-picker-trigger" aria-haspopup="listbox" aria-expanded="false"><span>选择 SSH Keypair</span><i aria-hidden="true">⌄</i></button><div class="entity-picker-popup" role="listbox" hidden></div>';
-  keypairSelect.classList.add("entity-picker-native");
-  keypairSelect.after(picker);
-  const emptyState = document.createElement("div");
-  emptyState.id = "hyperstackKeypairEmpty";
-  emptyState.className = "hyperstack-keypair-empty";
-  emptyState.hidden = true;
-  emptyState.innerHTML =
-    '<span aria-hidden="true">⌁</span><div><strong>还没有 SSH Keypair</strong><small>创建后平台会加密保存私钥，用于安全连接新建的 VM。</small></div><button type="button">创建 Keypair</button>';
-  emptyState.querySelector("button").onclick = () => button.click();
-  ownershipNotice.after(emptyState);
-  const registration = document.createElement("fieldset");
-  registration.id = "hyperstackKeypairRegistration";
-  registration.className = "hyperstack-keypair-registration";
-  registration.innerHTML =
-    '<legend>Keypair 区域注册</legend><label><input type="radio" name="hyperstackKeypairRegistrationMode" value="on-demand" checked> 按需自动注册 <small>推荐</small></label><label><input type="radio" name="hyperstackKeypairRegistrationMode" value="selected"> 注册到指定 Environment</label><div id="hyperstackKeypairEnvironmentChoices"></div><div class="hyperstack-keypair-registration-actions"><small id="hyperstackKeypairRegistrationStatus"></small><button id="saveHyperstackKeypairRegistration" type="button">保存注册策略</button></div>';
-  keypairLabel.after(registration);
-}
-function renderHyperstackKeypairPicker() {
-  const select = $("#hyperstackKeypair"),
-    picker = $("#hyperstackKeypairPicker"),
-    trigger = picker?.querySelector(".entity-picker-trigger"),
-    popup = picker?.querySelector(".entity-picker-popup");
-  if (!picker || !trigger || !popup) return;
-  const options = [...select.options].filter(
-      (option) => option.dataset.keypairId && !option.hidden,
-    ),
-    selected = select.selectedOptions[0],
-    selectedManaged = selected?.dataset.managed === "true";
-  trigger.disabled = !options.length;
-  trigger.classList.toggle(
-    "unmanaged",
-    Boolean(selected?.dataset.keypairId) && !selectedManaged,
-  );
-  trigger.querySelector("span").textContent = selected?.dataset.keypairId
-    ? `${selected.textContent}${selectedManaged ? "" : " · 非平台管理"}`
-    : "当前 Environment 没有 SSH Keypair";
-  popup.innerHTML = options
-    .map(
-      (option) =>
-        `<div class="entity-picker-item ${option.selected ? "selected" : ""} ${option.dataset.managed === "true" ? "" : "unmanaged"}" role="option" aria-selected="${option.selected}"><button type="button" data-select-keypair="${esc(option.dataset.keypairId)}"><strong>${esc(option.value)}</strong><small>${esc(option.dataset.environment || "")}${option.dataset.region ? " · " + esc(option.dataset.region) : ""}${option.dataset.managed === "true" ? " · 平台管理" : " · 非平台管理 · 不可创建 VM"}</small></button><button type="button" class="entity-picker-delete" data-delete-keypair="${esc(option.dataset.keypairId)}" aria-label="删除 ${esc(option.value)}" title="删除 Keypair">×</button></div>`,
-    )
-    .join("");
-  trigger.onclick = () => {
-    const opening = popup.hidden;
-    popup.hidden = !opening;
-    trigger.setAttribute("aria-expanded", String(opening));
-  };
-  popup.querySelectorAll("[data-select-keypair]").forEach((button) => {
-    button.onclick = () => {
-      const option = [...select.options].find(
-        (item) => item.dataset.keypairId === button.dataset.selectKeypair,
-      );
-      if (option) option.selected = true;
-      popup.hidden = true;
-      trigger.setAttribute("aria-expanded", "false");
-      select.dispatchEvent(new Event("change"));
-      renderHyperstackKeypairPicker();
-    };
-  });
-  popup.querySelectorAll("[data-delete-keypair]").forEach((button) => {
-    button.onclick = async (event) => {
-      event.stopPropagation();
-      const option = [...select.options].find(
-        (item) => item.dataset.keypairId === button.dataset.deleteKeypair,
-      );
-      if (
-        !option ||
-        !(await confirmAction(
-          `确定删除 SSH Keypair “${option.value}”？Hyperstack 中的公钥和平台保存的私钥都会被删除。`,
-          { title: "删除 SSH Keypair", confirmText: "删除" },
-        ))
-      )
-        return;
-      button.disabled = true;
-      try {
-        await request(
-          `/api/providers/hyperstack/keypairs/${encodeURIComponent(button.dataset.deleteKeypair)}`,
-          { method: "DELETE" },
-        );
-        await loadProviderConfig();
-        await loadHyperstackResources(
-          providerConfigStatus.find((item) => item.id === "hyperstack")
-            ?.hyperstackConfig || {},
-        );
-        toast("SSH Keypair 已删除");
-      } catch (error) {
-        button.disabled = false;
-        toast("Keypair 删除失败：" + error.message);
-      }
-    };
-  });
-}
-document.addEventListener("click", (event) => {
-  const picker = $("#hyperstackKeypairPicker"),
-    popup = picker?.querySelector(".entity-picker-popup"),
-    trigger = picker?.querySelector(".entity-picker-trigger");
-  if (picker && popup && !picker.contains(event.target)) {
-    popup.hidden = true;
-    trigger?.setAttribute("aria-expanded", "false");
-  }
-});
-function renderHyperstackKeypairRegistration(environments) {
-  const panel = $("#hyperstackKeypairRegistration"),
-    option = $("#hyperstackKeypair").selectedOptions[0],
-    choices = $("#hyperstackKeypairEnvironmentChoices"),
-    status = $("#hyperstackKeypairRegistrationStatus"),
-    button = $("#saveHyperstackKeypairRegistration"),
-    ownershipNotice = $("#hyperstackKeypairOwnershipNotice"),
-    emptyState = $("#hyperstackKeypairEmpty"),
-    createButton = $("#createHyperstackKeypair"),
-    hasKeypair = Boolean(option?.dataset.keypairId);
-  if (!panel) return;
-  panel.hidden = !hasKeypair;
-  if (emptyState) emptyState.hidden = hasKeypair;
-  createButton?.classList.toggle("empty-primary", !hasKeypair);
-  if (!hasKeypair) {
-    if (ownershipNotice) ownershipNotice.hidden = true;
-    return;
-  }
-  const managed = option.dataset.managed === "true",
-    mode = option.dataset.policyMode || "on-demand";
-  if (ownershipNotice) {
-    ownershipNotice.hidden = managed;
-    ownershipNotice.textContent = managed
-      ? ""
-      : "非平台管理：平台没有此 Keypair 的私钥，不能用它在平台创建或管理 VM，也不能跨区域注册。请改选或创建一个“平台管理”的 Keypair。";
-  }
-  const configSubmit = $("#hyperstackConfigForm").querySelector(
-    'button[type="submit"]',
-  );
-  if (configSubmit) {
-    configSubmit.disabled = !managed;
-    configSubmit.title = managed
-      ? ""
-      : "非平台管理的 SSH Keypair 不能用于平台创建 VM";
-  }
-  panel.disabled = !managed;
-  panel.classList.toggle("unavailable", !managed);
-  panel.querySelector(
-    `input[name="hyperstackKeypairRegistrationMode"][value="${mode}"]`,
-  ).checked = true;
-  let selected = [];
-  try {
-    selected = JSON.parse(option.dataset.policyEnvironments || "[]");
-  } catch {}
-  choices.innerHTML = environments
-    .map(
-      (environment) =>
-        `<label><input type="checkbox" value="${esc(environment.name)}" ${selected.includes(environment.name) ? "checked" : ""}> <span>${esc(environment.name)}</span><small>${esc(environment.region || "区域未知")}</small></label>`,
-    )
-    .join("");
-  const updateMode = () => {
-    const selectedMode = panel.querySelector(
-      'input[name="hyperstackKeypairRegistrationMode"]:checked',
-    )?.value;
-    choices.hidden = selectedMode !== "selected";
-  };
-  panel
-    .querySelectorAll('input[name="hyperstackKeypairRegistrationMode"]')
-    .forEach((input) => (input.onchange = updateMode));
-  updateMode();
-  status.textContent = managed
-    ? mode === "selected"
-      ? `已选择 ${selected.length} 个 Environment`
-      : "首次创建某区域 VM 时自动注册同一公钥"
-    : "该 Keypair 不是平台管理的，无法自动复制";
-  button.onclick = async () => {
-    const keypairId = option.dataset.keypairId,
-      selectedMode = panel.querySelector(
-        'input[name="hyperstackKeypairRegistrationMode"]:checked',
-      ).value,
-      selectedEnvironments = [...choices.querySelectorAll('input:checked')].map(
-        (input) => input.value,
-      );
-    button.disabled = true;
-    status.textContent =
-      selectedMode === "selected" ? "正在批量注册…" : "正在保存…";
-    try {
-      const saved = await request(
-        `/api/providers/hyperstack/keypairs/${encodeURIComponent(keypairId)}/registration`,
-        {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            mode: selectedMode,
-            environments: selectedEnvironments,
-          }),
-        },
-      );
-      option.dataset.policyMode = saved.mode;
-      option.dataset.policyEnvironments = JSON.stringify(saved.environments);
-      await loadHyperstackResources({
-        ...providerConfigStatus.find((item) => item.id === "hyperstack")
-          ?.hyperstackConfig,
-        keypairId,
-      });
-      toast("SSH Keypair 注册策略已保存");
-    } catch (error) {
-      status.textContent = "保存失败：" + error.message;
-    } finally {
-      button.disabled = false;
-    }
-  };
-}
-$("#createHyperstackKeypair").onclick = async () => {
-  const button = $("#createHyperstackKeypair"),
-    environment = $("#hyperstackEnvironment").value;
-  if (!environment) return toast("请先选择 Environment");
-  if (
-    !(await confirmAction(
-      `平台将在 ${environment} 创建新的 SSH Keypair，并加密保存私钥。`,
-      { title: "创建 SSH Keypair", confirmText: "创建" },
-    ))
-  )
-    return;
-  button.disabled = true;
-  button.textContent = "创建中…";
-  try {
-    const created = await request("/api/providers/hyperstack/keypairs", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ environment }),
-    });
-    await loadHyperstackResources({
-      ...providerConfigStatus.find((x) => x.id === "hyperstack")
-        ?.hyperstackConfig,
-      environment,
-      keyName: created.name,
-    });
-    toast(`已创建并安全保存 Keypair：${created.name}`);
-  } catch (error) {
-    toast("Keypair 创建失败：" + error.message);
-  } finally {
-    button.disabled = false;
-    button.textContent = "＋ 平台创建";
-  }
-};
-$("#hyperstackConfigForm").onsubmit = async (event) => {
-  event.preventDefault();
-  const button = event.currentTarget.querySelector('button[type="submit"]'),
-    keypairOption = $("#hyperstackKeypair").selectedOptions[0];
-  if (keypairOption?.dataset.managed !== "true")
-    return toast(
-      "当前 SSH Keypair 不是平台管理，不能用于平台创建 VM；请改选或创建平台管理的 Keypair",
-    );
-  button.disabled = true;
-  try {
-    await request("/api/providers/hyperstack/config", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        environment: $("#hyperstackEnvironment").value,
-        keyName: $("#hyperstackKeypair").value,
-        keypairId:
-          $("#hyperstackKeypair").selectedOptions[0]?.dataset.keypairId,
-        imageName: $("#hyperstackImage").value,
-        imageUser: $("#hyperstackImageUser").value,
-        agentCidr: $("#hyperstackAgentCidr").value,
-      }),
-    });
-    await loadProviderConfig();
-    await showBillingProvider("hyperstack");
-    toast("Hyperstack 部署配置已保存，可以创建虚拟机");
-  } catch (error) {
-    toast("配置保存失败：" + error.message);
   } finally {
     button.disabled = false;
   }
@@ -968,10 +461,12 @@ function renderOffers() {
           o,
           o.priceEstimateUnavailable ? "无法预估" : "创建前确认",
         );
-        if (o.provider === "ppio") {
-          const loaded = Array.isArray(o.regionalOffers);
-          return `<tr data-offer-row="${esc(o.id)}"><td><strong>${o.gpuCount || 1}× ${esc(o.gpu)}</strong><span class="sub">${esc(details)}</span></td><td><span class="provider"><i>P</i>${esc(o.providerName)}</span></td><td>${loaded ? o.regionalOffers.length : o.regions?.length || 0} 个地区</td><td class="sub">${loaded ? "展开后查看" : "按需查询库存"}</td><td><span class="score">${loaded ? "实时" : "待查询"}</span></td><td>${loaded ? "已加载" : "点击查看地区"}</td><td class="price"><strong>${esc(price)}</strong><span class="sub">参考价</span></td><td><button class="launch" data-regions="${esc(o.id)}">查看地区 ↓</button></td></tr>`;
-        }
+        const extensionRow = providerExtension(o.provider).renderOfferRow?.({
+          offer: o,
+          details,
+          price,
+        });
+        if (extensionRow) return extensionRow;
         const inventory =
           {
             none: "无库存",
@@ -997,116 +492,15 @@ function renderOffers() {
   $$("[data-launch]").forEach(
     (b) => (b.onclick = () => openLaunch(b.dataset.launch)),
   );
-  $$("[data-regions]").forEach((b) => (b.onclick = () => toggleRegions(b)));
+  for (const extension of providerExtensions.values())
+    extension.bindOfferRows?.({
+      getOffers: () => offers,
+      setOffers: (value) => { offers = value; },
+      chooseOffer: (value) => { selected = value; },
+      showLaunch,
+    });
 }
 
-async function toggleRegions(button) {
-  let offer = offers.find((o) => o.id === button.dataset.regions);
-  const row = button.closest("tr"),
-    existing = row.nextElementSibling;
-  if (existing?.classList.contains("region-detail")) {
-    existing.remove();
-    button.textContent = "查看地区 ↓";
-    return;
-  }
-  button.disabled = true;
-  button.textContent = Array.isArray(offer?.regionalOffers)
-    ? "展开中…"
-    : "查询库存…";
-  try {
-    if (!Array.isArray(offer?.regionalOffers)) {
-      const regional = await request("/api/providers/ppio/regional-inventory"),
-        byId = new Map(regional.offers.map((x) => [x.id, x]));
-      offers = offers.map((x) => byId.get(x.id) || x);
-      applyInstancePrices(regional.offers);
-      offer = offers.find((o) => o.id === button.dataset.regions);
-    }
-    const regions = offer?.regionalOffers || [];
-    const detail = document.createElement("tr");
-    detail.className = "region-detail";
-    const labels = {
-      none: "无库存",
-      low: "库存紧张",
-      normal: "库存一般",
-      high: "库存充足",
-      unknown: "查询失败",
-    };
-    detail.innerHTML = `<td colspan="8"><div class="region-grid">${
-      regions
-        .map((r, i) => {
-          const key = `${offer.id}|${i}`,
-            canLaunch = r.inventory !== "none" && r.inventory !== "unknown";
-          regionalSelections.set(key, {
-            ...offer,
-            clusterId: r.clusterId,
-            region: r.region,
-            price: r.price,
-            inventory: r.inventory,
-            deployable: r.deployable,
-          });
-          const action = !canLaunch
-            ? "无库存"
-            : r.deployable
-              ? "立即创建"
-              : "尝试创建";
-          return `<article><div><strong>${esc(r.region)}</strong><span class="availability ${r.inventory === "low" ? "limited" : canLaunch ? "" : "unavailable"}">● ${labels[r.inventory] || r.inventory}</span></div><div class="region-price">${formatPrice({ ...offer, ...r }, "价格未知")}</div><button class="launch" data-region-launch="${esc(key)}" ${canLaunch ? "" : "disabled"}>${action}</button></article>`;
-        })
-        .join("") || "没有可用地区数据"
-    }</div></td>`;
-    row.after(detail);
-    detail.querySelectorAll("[data-region-launch]").forEach(
-      (b) =>
-        (b.onclick = () => {
-          selected = regionalSelections.get(b.dataset.regionLaunch);
-          showLaunch();
-        }),
-    );
-    button.textContent = "收起地区 ↑";
-  } catch (e) {
-    toast(e.message);
-    button.textContent = "重试展开";
-  } finally {
-    button.disabled = false;
-  }
-}
-function applyInstancePrices(regionalOffers) {
-  instancePricingOffers = regionalOffers || instancePricingOffers;
-  const normalize = (value) =>
-    String(value || "")
-      .toLowerCase()
-      .replace(/nvidia|geforce|\s|-/g, "");
-  for (const instance of instances) {
-    if (instance.provider !== "ppio") continue;
-    const product =
-      instancePricingOffers.find(
-        (p) => String(p.productId) === String(instance.productId),
-      ) ||
-      instancePricingOffers.find(
-        (p) => normalize(p.gpu) === normalize(instance.gpu),
-      );
-    const regional = product?.regionalOffers?.find(
-        (r) =>
-          String(r.clusterId) === String(instance.clusterId) ||
-          r.region === instance.region,
-      ),
-      price = Number(regional?.price),
-      fallback = Number(product?.price);
-    instance.price =
-      Number.isFinite(price) && price > 0
-        ? price
-        : Number.isFinite(fallback) && fallback > 0
-          ? fallback
-          : undefined;
-    instance.priceSource =
-      price > 0
-        ? "regional-inventory"
-        : fallback > 0
-          ? "product-fallback"
-          : "unavailable";
-    const el = document.getElementById("price-" + String(instance.id));
-    if (el) el.textContent = formatPrice(instance, "—");
-  }
-}
 async function loadOffers(force = false) {
   if (offersLoading) return offersLoading;
   offersLoading = (async () => {
@@ -1117,16 +511,19 @@ async function loadOffers(force = false) {
       renderOffers();
       if (force) {
         $("#refresh").textContent = "加载地区库存…";
-        try {
-          const regional = await request(
-              "/api/providers/ppio/regional-inventory?refresh=1",
-            ),
-            byId = new Map(regional.offers.map((x) => [x.id, x]));
-          offers = offers.map((x) => byId.get(x.id) || x);
-          renderOffers();
-          applyInstancePrices(regional.offers);
-        } catch (e) {
-          toast(`PPIO 地区库存加载失败：${e.message}`);
+        for (const definition of providerDefinitions.values()) {
+          const extension = providerExtension(definition.id);
+          if (typeof extension.refreshOffers !== "function") continue;
+          try {
+            await extension.refreshOffers({
+              definition,
+              getOffers: () => offers,
+              setOffers: (value) => { offers = value; },
+              render: renderOffers,
+            });
+          } catch (e) {
+            toast(`${definition.title} 地区库存加载失败：${e.message}`);
+          }
         }
       }
     } finally {
@@ -1165,10 +562,13 @@ function behaviorHint(type){
   const select=$(type==="vm"?"#vmProfile":"#dockerProfile"),hint=$(type==="vm"?"#vmProfileHint":"#dockerProfileHint"),profile=imageProfiles.find(item=>item.id===select.value);
   hint.textContent=profile?.localFileExists===false?`本地启动脚本不存在：${profile.startupScriptPath}`:profile?`${type==="docker"?(profile.image||"供应商默认镜像"):"VM 宿主机"} · SSH 系统必装 · 启动脚本配置`:"请先选择开机行为";
   hint.classList.toggle("local-file-hint",profile?.localFileExists===false);
-  if(type==="docker")$("#cudaFallbackWrap").style.display=selected?.provider==="hyperstack"&&profile?.cudaMajor===13?"block":"none";
+  if(type==="docker")$("#cudaFallbackWrap").style.display=providerDefinitions.get(selected?.provider)?.launch?.cudaFallback&&profile?.cudaMajor===13?"block":"none";
 }
 function profileOptions(type){return imageProfiles.filter(profile=>profile.profileType===type).map(profile=>`<option value="${esc(profile.id)}" ${profile.recommended&&profile.localFileExists!==false?"selected":""} ${profile.localFileExists===false?"disabled":""}>${esc(profile.name)}${profile.localFileExists===false?"（本地脚本不存在）":""}</option>`).join("");}
 async function showLaunch() {
+  const launch = providerDefinitions.get(selected.provider)?.launch || {
+    profileType: "docker",
+  };
   $("#selectedOffer").innerHTML =
     `<div class="offer-summary"><strong>${selected.gpuCount || 1}× ${esc(selected.gpu)}</strong><div class="sub">${esc(selected.providerName)} · ${esc(selected.region || "自动调度")}${selected.vram ? " · " + selected.vram + " GB 显存" : ""}</div></div>`;
   $("#dialogPrice").textContent = formatPrice(
@@ -1177,21 +577,21 @@ async function showLaunch() {
   );
   $("#dialogPrice").previousElementSibling.querySelector("small").textContent =
     selected.priceEstimated
-      ? `其他厂商同型号中位数估价 · 来源：${(selected.estimateProviders || []).join("、")} · 创建后显示 AutoDL 真实价格`
+      ? `其他厂商同型号中位数估价 · 来源：${(selected.estimateProviders || []).join("、")} · 创建后显示真实价格`
       : selected.priceEstimateUnavailable
-        ? "其他厂商没有同型号、同配置实例；创建后显示 AutoDL 真实价格"
+        ? "其他厂商没有同型号、同配置实例；创建后显示真实价格"
       : "按实际运行时长计费";
   $("#cudaFallbackWrap").style.display =
-    selected.provider === "hyperstack" ? "block" : "none";
+    launch.cudaFallback ? "block" : "none";
   $("#allowCuda128Fallback").checked = false;
   const imageSelect=$("#imageVersion"),dockerSelect=$("#dockerProfile"),vmSelect=$("#vmProfile");
-  $("#providerImageWrap").hidden=selected.provider!=="autodl";
-  $("#dockerProfileWrap").hidden=selected.provider==="hyperstack";
-  $("#vmProfileWrap").hidden=selected.provider!=="hyperstack";
+  $("#providerImageWrap").hidden=!launch.providerImage;
+  $("#dockerProfileWrap").hidden=launch.profileType!=="docker";
+  $("#vmProfileWrap").hidden=launch.profileType!=="vm";
   imageSelect.disabled=dockerSelect.disabled=vmSelect.disabled=true;
   dockerSelect.innerHTML="<option>正在加载 Docker 配置…</option>";
   vmSelect.innerHTML="<option>正在加载 VM 配置…</option>";
-  if (selected.provider === "autodl") {
+  if (launch.providerImage) {
     $("#imageVersionHint").textContent =
       "可选择账号镜像（含已共享到账号的社区镜像）或官方基础镜像。";
   }
@@ -1201,13 +601,13 @@ async function showLaunch() {
     dockerSelect.innerHTML=profileOptions("docker");
     vmSelect.innerHTML=profileOptions("vm");
     if(!dockerSelect.options.length)throw Error("没有可用的 Docker 开机行为");
-    if(selected.provider==="hyperstack"&&!vmSelect.options.length)throw Error("没有可用的 VM 开机行为");
+    if(launch.profileType==="vm"&&!vmSelect.options.length)throw Error("没有可用的 VM 开机行为");
     dockerSelect.onchange=()=>behaviorHint("docker");
     vmSelect.onchange=()=>behaviorHint("vm");
     behaviorHint("docker");
-    if(selected.provider==="hyperstack")behaviorHint("vm");
-    if (selected.provider === "autodl") {
-      const discovery = await request("/api/providers/autodl/discovery"),
+    if(launch.profileType==="vm")behaviorHint("vm");
+    if (launch.providerImage) {
+      const discovery = await request(`/api/providers/${encodeURIComponent(selected.provider)}/discovery`),
         account = discovery.accountImages || [],
         official = discovery.officialImages || [],
         options = (images) =>
@@ -1223,14 +623,14 @@ async function showLaunch() {
           ? `<optgroup label="我的 / 已共享镜像">${options(account)}</optgroup>`
           : "") +
         (official.length
-          ? `<optgroup label="AutoDL 官方基础镜像">${options(official)}</optgroup>`
+          ? `<optgroup label="厂商官方基础镜像">${options(official)}</optgroup>`
           : "");
       if (!account.length && !official.length)
-        throw Error("AutoDL 没有返回可用镜像");
+        throw Error("厂商没有返回可用镜像");
     }
-    imageSelect.disabled=selected.provider!=="autodl";
-    dockerSelect.disabled=false;
-    vmSelect.disabled=selected.provider!=="hyperstack";
+    imageSelect.disabled=!launch.providerImage;
+    dockerSelect.disabled=launch.profileType!=="docker";
+    vmSelect.disabled=launch.profileType!=="vm";
   } catch (error) {
     dockerSelect.innerHTML='<option value="">配置加载失败</option>';
     toast(error.message);
@@ -1243,12 +643,13 @@ function openLaunch(id) {
   $("#confirmLaunch").onclick = async (e) => {
   e.preventDefault();
   const button = $("#confirmLaunch"),
-    old = button.textContent;
-    if(selected.provider==="autodl"&&(!$("#imageVersion").value||$("#imageVersion").disabled))return toast("请先选择可用的厂商镜像");
-    if(selected.provider!=="hyperstack"&&(!$("#dockerProfile").value||$("#dockerProfile").disabled))return toast("请先选择 Docker 开机行为");
-    if(selected.provider==="hyperstack"&&(!$("#vmProfile").value||$("#vmProfile").disabled))return toast("请先选择 VM 开机行为");
+    old = button.textContent,
+    launch = providerDefinitions.get(selected.provider)?.launch || { profileType: "docker" };
+    if(launch.providerImage&&(!$("#imageVersion").value||$("#imageVersion").disabled))return toast("请先选择可用的厂商镜像");
+    if(launch.profileType==="docker"&&(!$("#dockerProfile").value||$("#dockerProfile").disabled))return toast("请先选择 Docker 开机行为");
+    if(launch.profileType==="vm"&&(!$("#vmProfile").value||$("#vmProfile").disabled))return toast("请先选择 VM 开机行为");
     const launchProfile=imageProfiles.find(profile=>profile.id===$("#dockerProfile").value),vmLaunchProfile=imageProfiles.find(profile=>profile.id===$("#vmProfile").value);
-    if(selected.provider!=="hyperstack"&&launchProfile?.localFileExists===false||selected.provider==="hyperstack"&&vmLaunchProfile?.localFileExists===false)return toast("本地启动脚本不存在，请到开机行为页重新选择文件");
+    if(launch.profileType==="docker"&&launchProfile?.localFileExists===false||launch.profileType==="vm"&&vmLaunchProfile?.localFileExists===false)return toast("本地启动脚本不存在，请到开机行为页重新选择文件");
   button.disabled = true;
   button.textContent = "正在提交…";
   try {
@@ -1267,21 +668,20 @@ function openLaunch(id) {
         price: selected.price,
         priceUnit: selected.priceUnit,
         priceSource: selected.priceSource || selected.source,
-        imageVersion:
-          selected.provider === "autodl" ? undefined : $("#imageVersion").value,
+        imageVersion: launch.providerImage ? undefined : $("#imageVersion").value,
             imageProfileId:
-              selected.provider === "hyperstack" ? undefined : $("#dockerProfile").value,
+              launch.profileType === "docker" ? $("#dockerProfile").value : undefined,
         vmProfileId:
-          selected.provider === "hyperstack" ? $("#vmProfile").value : undefined,
+          launch.profileType === "vm" ? $("#vmProfile").value : undefined,
         imageUuid:
-          selected.provider === "autodl" ? $("#imageVersion").value : undefined,
+          launch.providerImage ? $("#imageVersion").value : undefined,
         cudaMin:
-          selected.provider === "autodl"
+          launch.providerImage
             ? Number($("#imageVersion").selectedOptions[0]?.dataset.cudaMin) ||
               undefined
             : undefined,
         allowCuda128Fallback:
-          selected.provider === "hyperstack" &&
+          launch.cudaFallback &&
           $("#allowCuda128Fallback").checked,
       }),
     });
@@ -1297,7 +697,7 @@ function openLaunch(id) {
       affected.selectedOptions[0]?.setAttribute("disabled","");
       behaviorHint(profile?.profileType||"docker");
       toast(error.message);
-    } else if (error.code === "autodl_no_compatible_host") {
+    } else if (providerDefinitions.get(selected.provider)?.errorPolicies?.[error.code] === "invalidate-offer") {
       if (selected) {
         selected.available = false;
         selected.deployable = false;

@@ -1,0 +1,29 @@
+{
+  "id": "hyperstack",
+  "order": 30,
+  "kind": "cloud_compute",
+  "credentialEnv": "HYPERSTACK_API_KEY",
+  "currency": "美元",
+  "provisioningRequirements": [
+    {"anyOf":["HYPERSTACK_ENVIRONMENT","HYPERSTACK_ENVIRONMENTS"],"label":"HYPERSTACK_ENVIRONMENT(S)"},
+    {"allOf":["HYPERSTACK_KEY_NAME"],"label":"HYPERSTACK_KEY_NAME"},
+    {"allOf":["HYPERSTACK_IMAGE_NAME"],"label":"HYPERSTACK_IMAGE_NAME"},
+    {"allOf":["HYPERSTACK_IMAGE_USER"],"label":"HYPERSTACK_IMAGE_USER"}
+  ],
+  "title": "Hyperstack",
+  "description": "NexGen Cloud 虚拟机",
+  "clientModule": "client.js",
+  "launch": {"profileType":"vm","managedSsh":false,"cudaFallback":true},
+  "instanceAccess": {"level":"key","label":"需要额外 SSH 凭据","description":"网页创建的虚拟机可同步；事后登记 Keypair 不会写入现有虚拟机，需要提供创建时私钥、可用密码，或手动安装平台公钥。"},
+  "portals": [
+    {"id":"billing","label":"打开充值页面","url":"https://console.hyperstack.cloud/billing"},
+    {"id":"key","label":"获取 API Key","url":"https://console.hyperstack.cloud/settings/api-keys"}
+  ],
+  "fields": [
+    {"id":"apiKey","storageKey":"hyperstack","label":"API Key","control":"password","masked":true,"required":true,"placeholder":"粘贴 Hyperstack API Key","portal":{"label":"获取 Key","url":"https://console.hyperstack.cloud/settings/api-keys"}},
+    {"id":"environment","storageKey":"HYPERSTACK_ENVIRONMENT","label":"Environment","control":"select","masked":false,"required":true,"optionsSource":{"method":"GET","url":"/api/providers/hyperstack/resources","itemsPath":"environments","valuePath":"name","labelPath":"name"}},
+    {"id":"keyName","storageKey":"HYPERSTACK_KEY_NAME","label":"SSH Keypair","control":"select","masked":false,"required":true,"optionsSource":{"method":"GET","url":"/api/providers/hyperstack/resources","itemsPath":"keypairs","valuePath":"name","labelPath":"name"}},
+    {"id":"imageName","storageKey":"HYPERSTACK_IMAGE_NAME","label":"宿主机系统","control":"select","masked":false,"required":true,"optionsSource":{"method":"GET","url":"/api/providers/hyperstack/resources","itemsPath":"images","valuePath":"name","labelPath":"name"}},
+    {"id":"agentCidr","storageKey":"HYPERSTACK_AGENT_CIDR","label":"平台访问 CIDR","control":"text","masked":false,"required":true,"placeholder":"例如 203.0.113.10/32"}
+  ]
+}

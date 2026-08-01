@@ -1,0 +1,20 @@
+{
+  "id": "ppio",
+  "order": 10,
+  "kind": "cloud_compute",
+  "credentialEnv": "PPIO_API_KEY",
+  "currency": "人民币",
+  "title": "PPIO 派欧云",
+  "description": "GPU 容器实例",
+  "clientModule": "client.js",
+  "offerPresentation": "regional",
+  "launch": {"profileType":"docker","managedSsh":true},
+  "instanceAccess": {"level":"direct","label":"可直接接入","description":"网页创建的 GPU 实例可通过 API 同步；厂商返回 SSH 地址和密码时平台可直接校验并接入，否则可提供私钥、密码或手动安装公钥。"},
+  "portals": [
+    {"id":"billing","label":"打开充值页面","url":"https://ppio.com/console/billing"},
+    {"id":"key","label":"获取 API Key","url":"https://ppio.com/console/account/api-key"}
+  ],
+  "fields": [
+    {"id":"apiKey","storageKey":"ppio","label":"API Key","control":"password","masked":true,"required":true,"placeholder":"粘贴 PPIO API Key","portal":{"label":"获取 Key","url":"https://ppio.com/console/account/api-key"}}
+  ]
+}

@@ -93,12 +93,13 @@ test('launch UI and bootstrap carry a selected image profile script', () => {
   const root=path.join(__dirname,'..');
   const read=file=>fs.readFileSync(path.join(root,file),'utf8');
   assert.match(read('public/providers-page.js'),/imageProfileId:/);
-  assert.match(read('public/providers-page.js'),/dockerProfileWrap.*hyperstack/);
-  assert.match(read('server.js'),/d\.provider !== "hyperstack"/);
+  assert.match(read('public/providers-page.js'),/launch\.profileType!=="docker"/);
+  assert.match(read('server.js'),/launch\.profileType === "docker"/);
+  assert.match(read('server.js'),/launch\.profileType === "vm"/);
   assert.match(read('server.js'),/instanceLaunchProfiles/);
   assert.match(read('agent/bootstrap.sh'),/run_configured_startup/);
   assert.match(read('server.js'),/values\.FLEET_STARTUP_SCRIPT_B64/);
-  assert.match(read('server.js'),/values\.FLEET_VM_STARTUP_SCRIPT_B64/);
-  assert.match(read('agent/hyperstack.sh'),/run_vm_startup/);
-  assert.match(read('server.js'),/d\.imageUrl=vmProfile\.image\|\|resolveCuda13Image/);
+  assert.match(read('lib/cloud_compute/hyperstack/runtime.js'),/values\.FLEET_VM_STARTUP_SCRIPT_B64/);
+  assert.match(read('lib/cloud_compute/hyperstack/agent/hyperstack.sh'),/run_vm_startup/);
+  assert.match(read('server.js'),/d\.imageUrl = vmProfile\.image \|\| resolveCuda13Image/);
 });

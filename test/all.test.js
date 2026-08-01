@@ -1,4 +1,5 @@
 require('./providers.test');
+require('./provider-architecture.test');
 require('./runtime-image.test');
 require('./image-profile.test');
 require('./credential-store.test');

@@ -12,7 +12,9 @@ test('runtime image leaves fast-moving developer CLIs to instance bootstrap', ()
   assert.doesNotMatch(dockerfile, /FLEET_PREBUILT_IMAGE/);
   assert.doesNotMatch(dockerfile, /@openai\/codex/);
   assert.doesNotMatch(dockerfile, /@anthropic-ai\/claude-code/);
-  const profiles = read('lib/image-profile-store.js');
+  const profiles = [
+    'pytorch_2_11', 'pytorch_2_10', 'pytorch_2_7',
+  ].map(name => read(`lib/startup_profiles/${name}/startup.sh`)).join('\n');
   assert.match(profiles, /@openai\/codex@latest/);
   assert.match(profiles, /@anthropic-ai\/claude-code@latest/);
 });
@@ -61,7 +63,7 @@ test('launch UI submits a persisted image startup profile', () => {
   assert.doesNotMatch(html, /id="imageBuildMode"/);
   assert.match(app, /request\("\/api\/image-profiles"\)/);
   assert.match(app, /imageProfileId:/);
-  assert.match(app, /selected\.provider === "hyperstack" \? undefined : \$\("#dockerProfile"\)\.value/);
+  assert.match(app, /launch\.profileType === "docker" \? \$\("#dockerProfile"\)\.value : undefined/);
   assert.match(app, /vmProfileId:/);
   assert.match(server, /imageProfileStore\.get\(d\.imageProfileId\)/);
   assert.match(app, /startupScriptFile/);
@@ -79,7 +81,7 @@ test('runtime installs SSH and verifies startup with init-system fallbacks', () 
   const dockerfile = read('Dockerfile.runtime');
   const bootstrap = read('agent/bootstrap.sh');
   const ssh = read('agent/ensure-ssh.sh');
-  const hyperstack = read('agent/hyperstack.sh');
+  const hyperstack = read('lib/cloud_compute/hyperstack/agent/hyperstack.sh');
   assert.match(dockerfile, /openssh-server/);
   assert.match(dockerfile, /EXPOSE 22 3000/);
   assert.match(bootstrap, /ensure-ssh\.sh/);
@@ -104,16 +106,22 @@ test('runtime installs SSH and verifies startup with init-system fallbacks', () 
 
 test('runtime uses a lightweight init to forward signals and reap child processes', () => {
   const dockerfile = read('Dockerfile.runtime');
-  const profiles = read('lib/image-profile-store.js');
+  const profiles = [
+    'ngc_25_01', 'ngc_24_10', 'vm_default',
+  ].map(name => read(`lib/startup_profiles/${name}/startup.sh`)).join('\n');
   const provisioning = read('lib/provisioning.js');
-  const providers = read('lib/providers.js');
-  const minimalSsh = read('lib/provider-startup/minimal-ssh.js');
-  const hyperstack = read('agent/hyperstack.sh');
+  const providerStartups = [
+    read('lib/cloud_compute/ppio/adapter.js'),
+    read('lib/cloud_compute/autodl/adapter.js'),
+    read('lib/cloud_compute/runpod/adapter.js'),
+  ].join('\n');
+  const minimalSsh = read('lib/cloud_compute/common/minimal-ssh.js');
+  const hyperstack = read('lib/cloud_compute/hyperstack/agent/hyperstack.sh');
   assert.match(dockerfile, /\btini\b/);
   assert.match(dockerfile, /ENTRYPOINT \["\/usr\/bin\/tini", "-g", "--"\]/);
   assert.match(profiles, /\btini\b/);
   for (const generator of ['ppioStartupCommand','autodlStartupCommand','runpodStartupCommand']) {
-    assert.match(providers, new RegExp(generator));
+    assert.match(providerStartups, new RegExp(generator));
   }
   for (const startup of [provisioning, hyperstack]) {
     assert.match(startup, /ps -p 1 -o comm=/);
@@ -125,10 +133,10 @@ test('runtime uses a lightweight init to forward signals and reap child processe
 
 test('Hyperstack provisioning is uploaded over SSH without a public control-plane URL', () => {
   const server = read('server.js');
-  const providers = read('lib/providers.js');
-  const hyperstack = read('agent/hyperstack.sh');
-  assert.match(server, /provisionHyperstackViaSsh/);
-  assert.match(server, /FLEET_LOCAL_BOOTSTRAP_PATH/);
+  const providers = read('lib/cloud_compute/hyperstack/adapter.js');
+  const hyperstack = read('lib/cloud_compute/hyperstack/agent/hyperstack.sh');
+  assert.match(read('lib/cloud_compute/hyperstack/runtime.js'), /provisionViaSsh/);
+  assert.match(read('lib/cloud_compute/hyperstack/runtime.js'), /FLEET_LOCAL_BOOTSTRAP_PATH/);
   assert.doesNotMatch(server, /FLEET_BOOTSTRAP_URL|hyperstack-status/);
   assert.match(providers, /user_data/);
   assert.match(hyperstack, /\/opt\/fast-gpu\/bootstrap\.sh/);
@@ -245,7 +253,7 @@ test('running container instances receive bootstrap over SSH when telemetry is a
   const server = read('server.js');
   const app = frontendSource();
   assert.doesNotMatch(server, /instance\.provider\s*===\s*["']autodl["']/);
-  assert.match(server, /instance\.provider\s*!==\s*["']hyperstack["']/);
+  assert.match(server, /telemetry\?\.reinjectWhenDisconnected\s*!==\s*false/);
   assert.match(server, /ssh_bootstrap_injection_failed/);
   assert.match(server, /instance\.status\s*===\s*["']running["']/);
   assert.match(server, /completeBaseUrlUpdate\(providerId,\s*id\)/);
@@ -323,7 +331,7 @@ test('SSH decoration does not rewrite the instance lifecycle status', () => {
 });
 
 test('Hyperstack SSH CIDR defaults to all IPv4 sources for portable direct access', () => {
-  const app = frontendSource();
-  assert.match(app, /input\.value\s*=\s*["']0\.0\.0\.0\/0["']/);
-  assert.match(app, /SSH 来源 CIDR/);
+  const extension = read('lib/cloud_compute/hyperstack/client.js');
+  assert.match(extension, /saved\.agentCidr \|\| '0\.0\.0\.0\/0'/);
+  assert.match(extension, /SSH 来源 CIDR/);
 });
